@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"bufio"
+	"unicode/utf8"
 	"golang.org/x/crypto/ssh/terminal"
 	"github.com/stellar/go/keypair"
 	"github.com/stellar/go/price"
@@ -143,6 +144,32 @@ func getSeed(prompt string) (string) {
 	}
 
 	return src
+}
+
+func getAddressOrSeed(prompt string) (string) {
+	var adr string = ""
+
+	for done := false; !done; {
+		fmt.Printf("%s (public or private key): ", prompt)
+
+		input := getAddressFromTerminal()
+		input = strings.TrimRight(input, "\r\n")
+		kp, err := keypair.Parse(input)
+
+		if err != nil {
+			fmt.Println("Invalid address.")
+		} else {
+			kpf, ok := kp.(*keypair.Full)
+			if ok {
+				adr = kpf.Seed()
+			} else {
+				adr = kp.Address()
+			}
+			done = true
+		}
+	}
+
+	return adr
 }
 
 func getAddress(prompt string) (string) {
@@ -288,4 +315,51 @@ func getOk(prompt string) (bool) {
 		} 
 	}
 }
-	
+
+func appendTableLine( table [][]string, str ...string) [][]string {
+	var line []string
+
+	for _, s := range str {
+		line = append(line, s)
+	}
+
+	table = append(table, line)
+	return table
+}
+
+func printTable(table [][]string, cols int, separator string) {
+	printTablePrefixFp(table, cols, separator, "", os.Stdout)
+}
+
+func printTablePrefixFp( table [][]string, cols int, separator string, prefix string, fp io.Writer) {
+	var colw = make([]int, cols, cols)
+
+	for i := range colw {
+		colw[i] = 0
+	}
+
+	for l := range table {
+		line := table[l]
+		for c := range line {
+			if c < cols {
+				len := utf8.RuneCountInString(line[c])
+				if len > colw[c] {
+					colw[c] = len
+				}
+			}
+		}
+	}
+			
+	for l := range table {
+		line := table[l]
+		fmt.Fprintf(fp, "%s", prefix)
+		for c := range line {
+			len := utf8.RuneCountInString(line[c])
+			fmt.Fprintf(fp, "%s%s", line[c], strings.Repeat(" ", colw[c]-len))
+			if c < cols-1 {
+				fmt.Fprintf(fp, "%s", separator)
+			}
+		}
+		fmt.Fprintf(fp, "\n")
+	}
+}

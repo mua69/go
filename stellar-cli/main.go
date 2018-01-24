@@ -2,40 +2,54 @@ package main
 
 import (
 	"fmt"
+	"flag"
 	"strings"
-	//    "time"
 	"net/http"
 	"io/ioutil"
 	"os"
 	"bufio"
-	//"log"
-	//    "golang.org/x/net/context"
+	"encoding/hex"
+
 	"github.com/stellar/go/keypair"
 	"github.com/stellar/go/build"
+	"github.com/stellar/go/xdr"
 	"github.com/stellar/go/clients/stellartoml"
 	"github.com/stellar/go/clients/federation"
 	"github.com/stellar/go/clients/horizon"
+	"github.com/stellar/go/network"
 )
 
 
 var (
 	NW_PASS = build.TestNetwork
 	CLIENT = horizon.DefaultTestNetClient
+	g_version = "1.0"
+	g_gitHash = "undefined"
 
+	//flags
+	g_tx_in = ""
+	g_tx_out = ""
+	g_signers = ""
+	g_testnet = false
 )
 
-func setTestNetwork() {
-	NW_PASS = build.TestNetwork
-	CLIENT = horizon.DefaultTestNetClient
+func setupNetwork() {
+	if g_testnet {
+		NW_PASS = build.TestNetwork
+		CLIENT = horizon.DefaultTestNetClient
+	} else {
+		NW_PASS = build.PublicNetwork 	
+		CLIENT = &horizon.Client{
+			URL:  "https://horizon.stellarport.earth/",
+			HTTP: http.DefaultClient,
+		}
+	}
+			
+	fmt.Println("Using Network       :", NW_PASS)
+	fmt.Println("Using Horizon Server:", CLIENT.URL)
+	fmt.Println()
 }
 
-func setPublicNetwork() {
-	NW_PASS = build.PublicNetwork 	
-	CLIENT = &horizon.Client{
-		URL:  "https://horizon.stellarport.earth/",
-		HTTP: http.DefaultClient,
-	}
-}
 
 func newKeypair() {
 
@@ -89,147 +103,222 @@ func federationLookup(adr string) ( id, memoType, memo string)  {
 	return
 }
 
-func printTransactionResults( txr horizon.TransactionSuccess) {
-	fmt.Println("Transaction posted in ledger: ", txr.Ledger)
-	fmt.Println("Transaction hash            : ", txr.Hash)
-}
 
-func createAccount(src string, dst string, amount string) {
-
-	tx := build.Transaction(
-		build.SourceAccount{src},
-		build.AutoSequence{CLIENT},
-		NW_PASS,
-		build.CreateAccount(
-			build.Destination{dst},
-			build.NativeAmount{amount}),
-	)
-
-	txe := tx.Sign(src)
-	txeB64, _ := txe.Base64()
-
-	fmt.Printf("tx base64: %s\n", txeB64)
-
-	resp, err := CLIENT.SubmitTransaction(txeB64)
-	if err != nil {
-		panic(err)
-	}
-
-	printTransactionResults(resp)
-}
-
-func setInflationDestination(src, dst string) {
-	tx := build.Transaction(
-		build.SourceAccount{src},
-		build.AutoSequence{CLIENT},
-		NW_PASS,
-		build.SetOptions(build.InflationDest(dst)),
-	)
-    
-	txe := tx.Sign(src)
-	txeB64, err := txe.Base64()
-	
-	if err != nil {
-		panic(err)
-	}
-
-	fmt.Printf("tx base64: %s\n", txeB64)
-	
-	resp, err := CLIENT.SubmitTransaction(txeB64)
-	if err != nil {
-		panic(err)
-	}
-
-	printTransactionResults(resp)
-}
-
-func tx_setup( src string ) (tx *build.TransactionBuilder) {
-	tx = build.Transaction(
-		build.SourceAccount{src},
-		build.AutoSequence{CLIENT},
-		NW_PASS)
-	return
-}
-
-func tx_createAccount(tx *build.TransactionBuilder, dst string, amount string) {
-
-	tx.Mutate(
-		build.CreateAccount(
-			build.Destination{dst},
-			build.NativeAmount{amount}))
-}
-
-func tx_payment( tx *build.TransactionBuilder, dst string, amount string) {
-	tx.Mutate(build.Payment(
-		build.Destination{dst},
-		build.NativeAmount{amount}))
-}
-
-func tx_InflationDestination( tx *build.TransactionBuilder, dst string) {
-	tx.Mutate(
-		build.SetOptions(build.InflationDest(dst)))
-}
-
-func tx_memoText( tx *build.TransactionBuilder, memoText string ) {
-	tx.Mutate(build.MemoText{memoText})
-}
-
-
-
-func payment( src string, dst string, amount string, memoText string) {
-	var tx *build.TransactionBuilder
-
-	tx = build.Transaction(
-		build.SourceAccount{src},
-		build.AutoSequence{CLIENT},
-		NW_PASS,
-		build.Payment(
-			build.Destination{dst},
-			build.NativeAmount{amount}))
-
-	if memoText != "" {
-		tx.Mutate( build.MemoText{memoText} )
-	}
-    
-	txe := tx.Sign(src)
-	txeB64, err := txe.Base64()
-	
-	if err != nil {
-		panic(err)
-	}
-
-	fmt.Printf("tx base64: %s\n", txeB64)
-	
-	resp, err := CLIENT.SubmitTransaction(txeB64)
-	if err != nil {
-		panic(err)
-	}
-
-	printTransactionResults(resp)
-}
 
 func accountInfo(adr string) {
+	var table [][]string
+
 	acc, err := CLIENT.LoadAccount(adr)
 	if err != nil {
 		if herr, ok := err.(*horizon.Error); ok {
 			if herr.Problem.Title == "Resource Missing" {
 				fmt.Println("Account does not exist: ", adr)
-			} else { panic(err)
+			} else {
+				panic(herr)
 			}
 		} else { panic(err) }
 	} else {
-		fmt.Println("Address:", adr)
-		fmt.Println("Balance:", acc.GetNativeBalance())
-		fmt.Println("Inflation Destination: ", acc.InflationDestination);
+		table = appendTableLine(table, "Address", adr)
+		table = appendTableLine(table, "Balance (XLM)", acc.GetNativeBalance())
+		table = appendTableLine(table, "Inflation Destination", acc.InflationDestination)
+		if acc.HomeDomain != "" {
+			table = appendTableLine(table, "Home Domain", acc.HomeDomain)
+		}
+
+		var flags []string
+
+		if acc.Flags.AuthRequired {
+			flags = append(flags, "AUTH_REQUIRED")
+		}
+		if acc.Flags.AuthRevocable {
+			flags = append(flags, "AUTH_REVOCABLE")
+		}
+
+		table = appendTableLine(table, "Account Flags", strings.Join(flags, " "))
+
+		table = appendTableLine(table, "Low Threshold", fmt.Sprintf("%d", acc.Thresholds.LowThreshold))
+		table = appendTableLine(table, "Med Threshold", fmt.Sprintf("%d", acc.Thresholds.MedThreshold))
+		table = appendTableLine(table, "High Threshold", fmt.Sprintf("%d", acc.Thresholds.HighThreshold))
+		
+		for _, signer := range acc.Signers {
+			table = appendTableLine(table, "Signer", fmt.Sprintf("%s Weight:%d Key:%s Type:%s", signer.PublicKey,
+				signer.Weight, signer.Key, signer.Type))
+		}
+			
+		printTable(table, 2, ": ")
 	}
 }
+
+func transfer_xlm() {
+	var table [][]string
+
+	src :=      getAddressOrSeed("Source")
+	dst :=      getAddress("Destination")
+	amount :=   getPayment("Amount")
+	memoTxt := getMemoText("Memo Text (optional)")
+	//memoID :=    getMemoID("Memo ID (optional)")
+	
+	fmt.Println("\nTransaction summary:")
+	
+	table = appendTableLine(table, "Source Address", keypair.MustParse(src).Address())
+	table = appendTableLine(table, "Destination Address", dst)
+	table = appendTableLine(table, "Amount (native XLM)", amount)
+	table = appendTableLine(table, "Memo Text", "<" + memoTxt + ">")
+	//fmt.Println("Memo ID            :", memoID)
+	printTable(table, 2, ": ")
+	
+
+	fmt.Println()
+
+	tx := tx_setup(src)
+	tx_payment(tx, dst, amount)
+	if memoTxt != "" {
+		tx_memoText(tx, memoTxt)
+	}
+	tx_finalize(tx)
+
+	fmt.Println("Fee:", tx.TX.Fee)	
+
+	kp := keypair.MustParse(src)
+	kpf, ok := kp.(*keypair.Full)
+	if ok {
+		if getOk("Transmit transaction") {
+			txe := tx_sign(tx, kpf.Seed())
+			fmt.Println("Fee:", txe.E.Tx.Fee)	
+			tx_transmit(txe)
+		} else {
+			fmt.Println("Transaction aborted.")
+		}
+	} else {
+		fmt.Println("No signing key provided. Printing unsigned transaction for later signing:")
+		txe := tx.Sign()
+		outputTransactionBlob(&txe)
+	}
+}
+
+
+
+func outputTransactionBlob( txe *build.TransactionEnvelopeBuilder) {
+	txeB64, err := txe.Base64()
+	if err != nil {
+		panic(err)
+	}
+
+	fmt.Println(txeB64)
+
+	hash, err := network.HashTransaction( &txe.E.Tx, NW_PASS.Passphrase)
+
+	if err != nil {
+		panic(err)
+	}
+
+	fileName := fmt.Sprintf("tx_%s.txt", hex.EncodeToString(hash[:])[0:8])
+
+	err = writeTransactionBlob(txeB64, txe.E, fileName)
+
+	if err != nil {
+		fmt.Printf("Failed to write transaction blob to file \"%s\": %s\n", fileName, err.Error())
+	} else {
+		fmt.Printf("Transaction blob written to file: %s\n", fileName)
+	}
+
+}
+
+
+func sign_transaction() {
+	var tx_s string
+	var err error
+
+	if g_tx_in != "" {
+		fmt.Printf("Reading transaction blob from file: %s\n", g_tx_in)
+		tx_s, err = readTransactionBlob(g_tx_in)
+		if err != nil {
+			fmt.Printf("Failed to open file \"%s\": %s\n", g_tx_in, err.Error())
+			return
+		}
+	} else {
+		tx_s = readLine("Transaction blob")
+	}
+		
+	txe_xdr := &xdr.TransactionEnvelope{ }
+
+	txe_xdr.Scan(tx_s)
+
+	if txe_xdr.Tx.SourceAccount.Ed25519  == nil {
+		fmt.Printf("Invalid transaction blob: %s\n")
+		return
+	}
+
+	fmt.Println("\nTransaction details:")
+	print_transaction( txe_xdr, "", os.Stdout )
+
+	tx := build.Transaction(
+		NW_PASS)
+	tx.TX = &txe_xdr.Tx
+
+	key := getSeed("Signing key")
+	txe := tx.Sign(key)
+
+	fmt.Println("\nSigned transaction blob:")	
+	outputTransactionBlob(&txe)
+	
+}
+
+func submit_transaction() {
+	var tx_s string
+	var err error
+
+	if g_tx_in != "" {
+		fmt.Printf("Reading transaction blob from file: %s\n", g_tx_in)
+		tx_s, err = readTransactionBlob(g_tx_in)
+		if err != nil {
+			fmt.Printf("Failed to open file \"%s\": %s\n", g_tx_in, err.Error())
+			return
+		}
+	} else {
+		tx_s = readLine("Transaction blob")
+	}
+		
+	txe_xdr := &xdr.TransactionEnvelope{ }
+
+	txe_xdr.Scan(tx_s)
+	if txe_xdr.Tx.SourceAccount.Ed25519 == nil {
+		fmt.Printf("Invalid transaction blob: %s\n")
+		return
+	}
+
+	fmt.Println("\nTransaction details:")
+	print_transaction( txe_xdr, "", os.Stdout )
+
+	if len(txe_xdr.Signatures) == 0 {
+		fmt.Printf("\nTransaction is not signed - cannot submit.\n")
+		return
+	}
+
+	if getOk("Submit transaction") {
+		tx_transmit_blob(tx_s)
+	}
+}	
+
+func parseCommandLine() {
+	flag.BoolVar( &g_testnet, "testnet", false, "switch to testnet")
+	flag.StringVar( &g_tx_in, "tx-in", "", "path to file containing a transaction blob")
+	flag.StringVar( &g_tx_out, "tx-out", "", "path to file o which a transaction blob is written")
+	flag.StringVar( &g_signers, "signers", "", "path to file containing secrect keys for signing transactions")
+	flag.Parse()
+}
+
 	
 func main() {
-	//setTestNetwork()
-	setPublicNetwork()
+	fmt.Printf("stellar-cli version %s (git hash %s)\n\n", g_version, g_gitHash)
 
-	if len(os.Args) == 2 {
-		kp, err := keypair.Parse(os.Args[1])
+	parseCommandLine()
+
+	setupNetwork()
+
+
+	if flag.Arg(0) != "" {
+		kp, err := keypair.Parse(flag.Arg(0))
 		if err != nil {
 			fmt.Println("ERROR: Invalid Address: ", os.Args[1])
 			return
@@ -241,7 +330,7 @@ func main() {
 	in := bufio.NewReader(os.Stdin)
 	action := ""
 
-	fmt.Println("Select Action:")
+	fmt.Println("Select Action:\n")
 	fmt.Println("1  Print Account Info")
 	fmt.Println("2  Transfer Native XLM")
 	fmt.Println("3  Create New Account")
@@ -249,11 +338,14 @@ func main() {
 	fmt.Println("5  Fund Account (testnet)")
 	fmt.Println("6  Federation Lookup")
 	fmt.Println("7  Generate New Address")
-
+	fmt.Println("8  Sign Transaction")
+	fmt.Println("9  Submit Signed Transaction")
 	
 	fmt.Println("q  Quit")
 
+
 	for ; action == ""; {
+		fmt.Printf("\n--> ")
 		input, err := in.ReadString('\n')
 		if err != nil {
 			panic(err)
@@ -275,6 +367,10 @@ func main() {
 			action = "fed_lookup"
 		case "7":
 			action = "new_adr"
+		case "8":
+			action = "sign_tx"
+		case "9":
+			action = "submit_tx"
 		case "q":
 			fmt.Println("Quit.")
 			return
@@ -290,6 +386,7 @@ func main() {
 		accountInfo(adr)
 
 	case "fed_lookup":
+		fmt.Println("\n--> Lookup Federation Address\n")
 		adr := getFederationAddress("Enter Federation Address")
 		id, memoType, memo := federationLookup(adr)
 		if id != "" {
@@ -303,28 +400,11 @@ func main() {
 		}	
 
 	case "tran_xlm":
-		src :=         getSeed("Source")
-		dst :=      getAddress("Destination")
-		amount :=   getPayment("Amount")
-		memoTxt := getMemoText("Memo Text (optional)")
-		//memoID :=    getMemoID("Memo ID (optional)")
-
-		fmt.Println("\nTransaction summary:")
-		fmt.Println("Source Address     :", keypair.MustParse(src).Address())
-		fmt.Println("Destination Address:", dst)
-		fmt.Println("Amount (native XLM):", amount)
-		fmt.Printf ("Memo Text          : <%s>\n", memoTxt)
-		//fmt.Println("Memo ID            :", memoID)
-		fmt.Println()
-
-		if getOk("Transmit transaction") {
-			payment(src, dst, amount, memoTxt);
-		} else {
-			fmt.Println("Transaction aborted.")
-		}
-
+		fmt.Println("\n--> Transfer XLM\n")
+		transfer_xlm()
 
 	case "create_acc":
+		fmt.Println("\n--> Create Account\n")
 		src :=         getSeed("Source")
 		dst :=      getAddress("Destination")
 		amount :=   getPayment("Amount")
@@ -343,6 +423,7 @@ func main() {
 		}
 
 	case "infl_dst":
+		fmt.Println("\n--> Set Inflation Destination\n")
 		src := getSeed("Source")
 		dst := getAddress("Inflation Destination")
 		prompt := fmt.Sprintf("Set inflation destination of %s to %s ", keypair.MustParse(src).Address(), dst)
@@ -357,7 +438,15 @@ func main() {
 		getFund(adr)
 		accountInfo(adr)
 	case "new_adr":
+		fmt.Println("\n--> Create New Public/Private Key\n")
 		newKeypair()
+	case "sign_tx":
+		fmt.Println("\n--> Sign Transaction\n")
+		sign_transaction()
+	case "submit_tx":
+		fmt.Println("\n--> Submit Signed Transaction\n")
+		submit_transaction()
+
 	}
 
 
