@@ -250,8 +250,10 @@ func walletMenu() {
 	walletMenu := []MenuEntryCB{
 		{ listWallet, "List Accounts", true },
 		{ listAssets, "List Assets", true },
+		{ listTradingPairs, "List Trading Pairs", true },
 		{ accountMenu, "Manage Accounts", true },
 		{ assetMenu, "Manage Assets", true },
+		{ tradingPairMenu, "Manage Trading Pairs", true },
 		{ changePassword, "Change Password", true}}
 
 		
@@ -605,8 +607,11 @@ func changeAccountMemo() {
 }
 
 
-
 func selectAsset(prompt string, enterAssetOption, nativeOption bool) (selectedAsset *stellarwallet.Asset, native bool) {
+	if g_wallet == nil {
+		return nil, false
+	}
+
 	assets := g_wallet.GetAssets()
 
 	if len(assets) == 0 && !nativeOption {
@@ -701,6 +706,150 @@ func changeAssetDescription() {
 
 	if a != nil {
 		enterAssetDescription(a)
+	}
+}
+
+
+
+func tradingPairMenu() {
+
+	menu := []MenuEntryCB{
+		{ addTradingPair, "Add New Trading Pair", true},
+		{ changeTradingPairDescription, "Change Trading Pair Description", true},
+		{ deleteTradingPair, "Delete Trading Pair", true}}
+		
+	runCallbackMenu(menu, "TRADING PAIR: Select Action", false)
+}
+
+func listTradingPairs() {
+	fmt.Println("\nTrading Pairs:")
+	tps := g_wallet.GetTradingPairs()
+
+	for _, tp := range(tps) {
+		fmt.Printf("%s<->%s %s\n", assetToStringPretty(tp.Asset1()), assetToStringPretty(tp.Asset2()), 
+			tp.GetDescription())
+	}
+}
+
+func enterTradingPairDescription(tp *stellarwallet.TradingPair) {
+	for {
+		desc := readLine("Trading Pair description")
+		err := tp.SetDescription(desc)
+		if err != nil {
+			fmt.Printf("Invalid description: %s\n", err.Error())
+		} else {
+			break
+		}
+	}
+}
+
+func addTradingPair() {
+	fmt.Println("\nAdd new trading pair...")
+	
+	asset1, _ := selectAsset("Asset 1", false, true)
+	asset2, _ := selectAsset("Asset 2", false, true)
+
+	tp := g_wallet.FindTradingPair(asset1, asset2)
+
+	if tp != nil {
+		fmt.Println("Trading pair already exists")
+		return
+	}
+
+	tp = g_wallet.AddTradingPair(asset1, asset2)
+
+	if tp == nil {
+		fmt.Println("Invalid asset pair.")
+		return
+	}
+
+	enterTradingPairDescription(tp)
+
+	saveWallet()
+
+	fmt.Println("New trading pair successfully defined.")
+}
+
+func assetToStringPretty(a *stellarwallet.Asset) string {
+	if a == nil {
+		return "XLM"
+	}
+
+	issuer := a.Issuer()[:10] + "..." + a.Issuer()[len(a.Issuer())-10:]
+	s := a.AssetId() +  "/" + issuer
+
+	return s
+}
+
+func selectTradingPair(prompt string, enterOption bool) *stellarwallet.TradingPair {
+	if g_wallet == nil {
+		return nil
+	}
+
+	tps := g_wallet.GetTradingPairs()
+
+	if len(tps) == 0 {
+		return nil
+	}
+
+	menu := make([]MenuEntry, 0, len(tps)+1)
+
+	type choiceType struct {
+		id string
+		tp *stellarwallet.TradingPair
+		}
+	choices := make([]choiceType, 0, len(tps)+1)
+
+	choice := 1
+
+	if enterOption {
+		s := fmt.Sprintf("%d", choice)
+		menu = append(menu, MenuEntry{ s, "Enter Trading Pair", true})
+		choices = append(choices, choiceType{s, nil})
+		choice++
+	}
+
+	for _, tp := range tps {
+		s := fmt.Sprintf("%d", choice)
+		menu = append(menu, MenuEntry{ s, assetToStringPretty(tp.Asset1()) + "<->" + assetToStringPretty(tp.Asset2()) +
+			" " + tp.GetDescription(), true})
+		choices = append(choices, choiceType{s, tp})
+		
+		choice++
+	}
+
+	fmt.Printf("\n%s:\n", prompt)
+	sel := runMenu(menu, false)
+
+	for i,_ := range choices {
+		if choices[i].id == sel {
+			return choices[i].tp
+		}
+	}
+
+	return nil
+}
+
+func changeTradingPairDescription() {
+	fmt.Println("\nChange trading pair description...")
+
+	tp := selectTradingPair("Trading Pair", false)
+
+	enterTradingPairDescription(tp)
+
+	saveWallet()
+}
+
+func deleteTradingPair() {
+	fmt.Println("\nDelete trading pair...")
+
+	tp := selectTradingPair("Trading Pair to delete", false)
+
+	if !g_wallet.DeleteTradingPair(tp) {
+		fmt.Println("Delete trading pair failed.")
+	} else {
+		fmt.Printf("Deleted trading pair\n")
+		saveWallet()
 	}
 }
 

@@ -611,10 +611,12 @@ func runMenu(menu []MenuEntry, quitChoice bool) string {
 
 	choices := make([]string, len(menu))
 	
+	choice := 1
 	for i := 0; i < len(menu); i++ {
 		if menu[i].Enabled {
-			choices[i] = fmt.Sprintf("%d", i + 1)
+			choices[i] = fmt.Sprintf("%d", choice)
 			table = appendTableLine( table, choices[i], menu[i].Prompt )
+			choice++
 		}
 	}
 	
@@ -663,10 +665,12 @@ func runCallbackMenu(menu []MenuEntryCB, prompt string, loop bool) {
 
 	choices := make([]string, len(menu))
 	
+	choice := 1
 	for i := 0; i < len(menu); i++ {
 		if menu[i].Enabled {
-			choices[i] = fmt.Sprintf("%d", i + 1)
+			choices[i] = fmt.Sprintf("%d", choice)
 			table = appendTableLine( table, choices[i], menu[i].Prompt )
+			choice++
 		}
 	}
 	

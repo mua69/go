@@ -642,11 +642,12 @@ func amountToString(a *big.Rat) string {
 	return r.FloatString(7)
 }
 
+
+
 func placeOrder() {
 	acc, src, tx := enterSourceAccount()
 
-	asset1 := enterAsset("Asset 1")
-	asset2 := enterAsset("Asset 2")
+	asset1, asset2 := enterTradingPair("Trading Pair")
 
 	code1 := asset1.Code
 	if code1 == "" {
@@ -750,14 +751,12 @@ func fundAccount() {
 	accountInfo(adr)
 }
 
-func enterAsset(prompt string) horizon.Asset {
-	a, native := selectAsset(prompt, true, true)
-
+func stellarwalletAsset2HorizonAsset(a *stellarwallet.Asset) horizon.Asset {
 	var ha horizon.Asset
 
-	if native {
+	if a == nil {
 		ha.Type = "native"
-	} else if a != nil {
+	} else {
 		if len(a.AssetId()) <= 4 {
 			ha.Type = "credit_alphanum4"
 		} else {
@@ -765,13 +764,47 @@ func enterAsset(prompt string) horizon.Asset {
 		}
 		ha.Code = a.AssetId()
 		ha.Issuer = a.Issuer()
-	} else {
-		ha.Code, ha.Issuer = getAsset(prompt)
 	}
 
 	return ha
 }
 
+func enterAsset(prompt string) horizon.Asset {
+	a, native := selectAsset(prompt, true, true)
+
+	var ha horizon.Asset
+
+	if native {
+		ha = stellarwalletAsset2HorizonAsset(nil)
+	} else if a != nil {
+		ha = stellarwalletAsset2HorizonAsset(a)
+	} else {
+		ha.Code, ha.Issuer = getAsset(prompt)
+		if len(ha.Code) <= 4 {
+			ha.Type = "credit_alphanum4"
+		} else {
+			ha.Type = "credit_alphanum12"
+		}
+	}
+
+	return ha
+}
+
+func enterTradingPair(prompt string) (asset1, asset2 horizon.Asset) {
+	tp := selectTradingPair(prompt, true)
+
+	if tp != nil {
+		asset1 = stellarwalletAsset2HorizonAsset(tp.Asset1())
+		asset2 = stellarwalletAsset2HorizonAsset(tp.Asset2())
+	} else {
+		asset1 = enterAsset(prompt + " Asset 1")
+		asset2 = enterAsset(prompt + " Asset 2")
+	}
+
+	return
+}
+
+		
 func assetToString(a horizon.Asset) string {
 	if a.Type == "native" {
 		return "XLM"
@@ -781,11 +814,11 @@ func assetToString(a horizon.Asset) string {
 
 }
 
+
 func orderBook() {
 	fmt.Println("\nShow Order Book")
 
-	selling := enterAsset("Selling")
-	buying := enterAsset("Buying")
+	selling, buying := enterTradingPair("Trading Pair")
 
 	ob, err := g_horizon.LoadOrderBook(selling, buying)
 
