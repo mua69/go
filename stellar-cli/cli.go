@@ -425,7 +425,30 @@ func getMemoID(prompt string) (uint64) {
 		}
 	}
 }
-	
+
+// reads an unit64 number from terminal
+func getUint64(prompt string) (uint64) {
+
+	in := bufio.NewReader(os.Stdin)
+
+	for {
+		fmt.Printf("%s: ", prompt)
+
+		input, err := in.ReadString('\n')
+		if err != nil {
+			panic(err)
+		}
+		input = strings.TrimSpace(input)
+
+		id, err := strconv.ParseUint(input, 10, 64)
+		if err == nil {
+			return id
+		} else {
+			fmt.Println("invalid input, must be unsigned integer.")
+		}
+	}
+}
+
 
 func getOk(prompt string) (bool) {
 	in := bufio.NewReader(os.Stdin)

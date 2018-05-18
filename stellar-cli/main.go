@@ -658,17 +658,23 @@ func placeOrder() {
 		code2 = "XLM"
 	}
 
-	menu := []MenuEntry{
-		{ "buy", fmt.Sprintf("Buy %s with %s", code1, code2), true},
-		{ "sell", fmt.Sprintf("Sell %s for %s", code1, code2), true},
-		{ "update", "Update Order Book", true},
-		{ "done", "Done", true}}
+	var orderid uint64
+	orderid = 0
+
 
 
 
 	fmt.Printf("\n%s <=> %s\n", assetToString(asset1), assetToString(asset2))
 
 	for {
+
+		menu := []MenuEntry{
+			{ "buy", fmt.Sprintf("Buy %s with %s", code1, code2), true},
+			{ "sell", fmt.Sprintf("Sell %s for %s", code1, code2), true},
+			{ "orderid", fmt.Sprintf("Enter Order ID (current: %d)", orderid), true},
+			{ "update", "Update Order Book", true},
+			{ "done", "Done", true}}
+
 		fmt.Println()
 		printOrderBook(asset1, asset2, 3)
 
@@ -680,6 +686,11 @@ func placeOrder() {
 		}
 
 		if sel == "update" {
+			continue
+		}
+
+		if sel == "orderid" {
+			orderid = getUint64("Enter order ID")
 			continue
 		}
 
@@ -700,16 +711,26 @@ func placeOrder() {
 			fmt.Printf("Selling %s %s for %s %s, rate %s\n", amountToString(amount1), code1, 
 				amountToString(amount2), code2, rate.FloatString(7)) 
 			
-			tx_addOrder(tx, asset1, asset2, rate.FloatString(7), amountToString(amount1))
+			if orderid != 0 {
+				tx_updateOrder(tx, asset1, asset2, rate.FloatString(7), amountToString(amount1), orderid)
+			} else {
+				tx_addOrder(tx, asset1, asset2, rate.FloatString(7), amountToString(amount1))
+			}
 		} else {
 			fmt.Printf("Buying %s %s with %s %s, rate %s\n", amountToString(amount1), code1, 
 				amountToString(amount2), code2, rate.FloatString(7)) 
 			fmt.Printf("Selling %s %s for %s %s, rate %s\n", amountToString(amount2), code2, 
 				amountToString(amount3), code1, rateInv.FloatString(7)) 
-			tx_addOrder(tx, asset2, asset1, rateInv.FloatString(7), amountToString(amount2))
+			if orderid != 0 {
+				tx_updateOrder(tx, asset2, asset1, rateInv.FloatString(10), amountToString(amount2), orderid)
+			} else {
+				tx_addOrder(tx, asset2, asset1, rateInv.FloatString(10), amountToString(amount2))
+			}
 		}
 
 		transactionFinalize(acc, src, tx)
+
+		tx = tx_setup(src)
 	}
 }	
 	

@@ -215,6 +215,12 @@ func tx_addOrder(tx *build.TransactionBuilder, selling, buying horizon.Asset, pr
 		build.Amount(amount)))
 }
 
+func tx_updateOrder(tx *build.TransactionBuilder, selling, buying horizon.Asset, price, amount string, orderid uint64) {
+	tx.Mutate(build.UpdateOffer(build.Rate{horizonAssetToBuildAsset(selling),
+		horizonAssetToBuildAsset(buying), build.Price(price)},
+		build.Amount(amount), build.OfferID(orderid)))
+}
+
 func tx_memoText( tx *build.TransactionBuilder, memoText string ) {
 	tx.Mutate(build.MemoText{memoText})
 }
@@ -269,14 +275,14 @@ func tx_transmit_blob( tx_blob string ) {
 			fmt.Println(herr.Problem.Title)
 			fmt.Println(herr.Problem.Detail)
 			fmt.Println(string(herr.Problem.Extras["result_codes"]))
-			
-			panic(herr)
-		} else {
-			panic(err)
-		}
-	}
+			fmt.Println(herr.Error())
 
-	printTransactionResults(resp)
+		} else {
+			fmt.Println(err.Error())
+		}
+	} else {
+		printTransactionResults(resp)
+	}
 }
 
 
