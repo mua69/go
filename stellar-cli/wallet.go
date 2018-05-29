@@ -770,16 +770,20 @@ func addTradingPair() {
 	fmt.Println("New trading pair successfully defined.")
 }
 
+func abbreviateIssuer(s string) string {
+	return s[:5] + "..." + s[len(s)-5:]
+}
+
 func assetToStringPretty(a *stellarwallet.Asset) string {
 	if a == nil {
 		return "XLM"
 	}
 
-	issuer := a.Issuer()[:10] + "..." + a.Issuer()[len(a.Issuer())-10:]
-	s := a.AssetId() +  "/" + issuer
+	s := a.AssetId() +  "/" + abbreviateIssuer(a.Issuer())
 
 	return s
 }
+
 
 func selectTradingPair(prompt string, enterOption bool) *stellarwallet.TradingPair {
 	if g_wallet == nil {
@@ -811,7 +815,7 @@ func selectTradingPair(prompt string, enterOption bool) *stellarwallet.TradingPa
 
 	for _, tp := range tps {
 		s := fmt.Sprintf("%d", choice)
-		menu = append(menu, MenuEntry{ s, assetToStringPretty(tp.Asset1()) + "<->" + assetToStringPretty(tp.Asset2()) +
+		menu = append(menu, MenuEntry{ s, newAssetFrom(tp.Asset1()).toStringPretty() + "<->" + newAssetFrom(tp.Asset2()).toStringPretty() +
 			" " + tp.GetDescription(), true})
 		choices = append(choices, choiceType{s, tp})
 		

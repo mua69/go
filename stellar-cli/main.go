@@ -11,8 +11,6 @@ import (
 	"sync"
 	"time"
 
-	"math/big"
-
 	"github.com/mua69/stellarwallet"
 
 	"github.com/stellar/go/keypair"
@@ -22,7 +20,6 @@ import (
 	"github.com/stellar/go/clients/federation"
 	"github.com/stellar/go/clients/horizon"
 	"github.com/stellar/go/network"
-	"github.com/stellar/go/amount"
 )
 
 
@@ -182,12 +179,22 @@ func accountInfo(adr string) {
 	}	
 
 	table = appendTableLine(table, "Address", adr)
-	table = appendTableLine(table, "Balance (XLM)", acc.GetNativeBalance())
+
+	maxBalanceStringLen := 0
+	for i, _ := range acc.Balances {
+		as := &acc.Balances[i]
+		if len(as.Balance) > maxBalanceStringLen {
+			maxBalanceStringLen = len(as.Balance)
+		}
+	}
+
+	table = appendTableLine(table, "Balance (XLM)", fmt.Sprintf("%*s", maxBalanceStringLen,
+		acc.GetNativeBalance()))
 	for i, _ := range acc.Balances {
 		as := &acc.Balances[i]
 		if as.Asset.Code != "" {
 			table = appendTableLine(table, fmt.Sprintf("Balance (%s)", as.Asset.Code),
-				fmt.Sprintf("%s (%s/%s)", as.Balance, as.Asset.Code, as.Asset.Issuer))
+				fmt.Sprintf("%*s (%s/%s)", maxBalanceStringLen, as.Balance, as.Asset.Code, as.Asset.Issuer))
 		}
 	}
 	table = appendTableLine(table, "Inflation Destination", acc.InflationDestination)
@@ -204,24 +211,23 @@ func accountInfo(adr string) {
 		flags = append(flags, "AUTH_REVOCABLE")
 	}
 
-	table = appendTableLine(table, "Account Flags", strings.Join(flags, " "))
-	
-	table = appendTableLine(table, "Low Threshold", fmt.Sprintf("%d", acc.Thresholds.LowThreshold))
-	table = appendTableLine(table, "Med Threshold", fmt.Sprintf("%d", acc.Thresholds.MedThreshold))
-	table = appendTableLine(table, "High Threshold", fmt.Sprintf("%d", acc.Thresholds.HighThreshold))
+	if len(flags) > 0 {
+		table = appendTableLine(table, "Account Flags", strings.Join(flags, " "))
+	}
+
+	table = appendTableLine(table, "Thresholds Low/Med/High",
+		fmt.Sprintf("%d/%d/%d", acc.Thresholds.LowThreshold, acc.Thresholds.MedThreshold,
+			acc.Thresholds.HighThreshold))
 	
 	for _, signer := range acc.Signers {
-		table = appendTableLine(table, "Signer", fmt.Sprintf("%s Weight:%d Key:%s Type:%s", signer.PublicKey,
-			signer.Weight, signer.Key, signer.Type))
+		//table = appendTableLine(table, "Signer", fmt.Sprintf("%s Weight:%d Key:%s Type:%s", signer.PublicKey,
+		//	signer.Weight, signer.Key, signer.Type))
+		table = appendTableLine(table, "Signer", fmt.Sprintf("%s Weight:%d", signer.Key,
+			signer.Weight))
 	}
 	
 	printTable(table, 2, ": ")
 }
-
-
-
-
-
 
 
 func transactionFinalize(acc *stellarwallet.Account, src string, tx *build.TransactionBuilder) {
@@ -610,137 +616,37 @@ func addTrustLine() {
 
 	asset := enterAsset("")
 
-	tx_addTrustLine(tx, asset)
+	tx_addTrustLine(tx, asset.toHorizonAsset())
 	
 	enterMemo(tx)
 
 	transactionFinalize(acc, src, tx)
 }
 
-func createOrder(selling, buying horizon.Asset, price, amount string) {
-/*
+func createOrder() {
 	acc, src, tx := enterSourceAccount()
 	
 	selling := enterAsset("Selling")
 	buying := enterAsset("Buying")
 
-	price := getPayment("Price")
+	price := getPrice("Price")
 	amount := getAmount("Amount")
 
-	tx_addOrder(tx, selling, buying, price, amount)
+	tx_addOrder(tx, selling, buying, price, amount, 0)
 	
 	enterMemo(tx)
 
 	transactionFinalize(acc, src, tx)
-*/
-}
-
-func amountToString(a *big.Rat) string {
-	r := big.Rat{}
-	r.Quo(a, big.NewRat(amount.One, 1))
-
-	return r.FloatString(7)
 }
 
 
-
-func placeOrder() {
-	acc, src, tx := enterSourceAccount()
-
-	asset1, asset2 := enterTradingPair("Trading Pair")
-
-	code1 := asset1.Code
-	if code1 == "" {
-		code1 = "XLM"
-	}
-	code2 := asset2.Code
-	if code2 == "" {
-		code2 = "XLM"
-	}
-
-	var orderid uint64
-	orderid = 0
-
-
-
-
-	fmt.Printf("\n%s <=> %s\n", assetToString(asset1), assetToString(asset2))
-
-	for {
-
-		menu := []MenuEntry{
-			{ "buy", fmt.Sprintf("Buy %s with %s", code1, code2), true},
-			{ "sell", fmt.Sprintf("Sell %s for %s", code1, code2), true},
-			{ "orderid", fmt.Sprintf("Enter Order ID (current: %d)", orderid), true},
-			{ "update", "Update Order Book", true},
-			{ "done", "Done", true}}
-
-		fmt.Println()
-		printOrderBook(asset1, asset2, 3)
-
-		fmt.Println("\nSelect action:")
-		sel := runMenu(menu, false)
-		
-		if sel == "done" {
-			return
-		}
-
-		if sel == "update" {
-			continue
-		}
-
-		if sel == "orderid" {
-			orderid = getUint64("Enter order ID")
-			continue
-		}
-
-		price := getPrice("Price")
-		amount1 := big.NewRat(int64(getAmount("Amount")),1)
-
-		rate := big.NewRat(int64(price.N), int64(price.D))
-		
-		amount2 := &big.Rat{}
-		amount2.Mul(amount1, rate)
-		
-		rateInv := big.NewRat(int64(price.D), int64(price.N))
-
-		amount3 := &big.Rat{}
-		amount3.Mul(amount2, rateInv)
-
-		if sel == "sell" {
-			fmt.Printf("Selling %s %s for %s %s, rate %s\n", amountToString(amount1), code1, 
-				amountToString(amount2), code2, rate.FloatString(7)) 
-			
-			if orderid != 0 {
-				tx_updateOrder(tx, asset1, asset2, rate.FloatString(7), amountToString(amount1), orderid)
-			} else {
-				tx_addOrder(tx, asset1, asset2, rate.FloatString(7), amountToString(amount1))
-			}
-		} else {
-			fmt.Printf("Buying %s %s with %s %s, rate %s\n", amountToString(amount1), code1, 
-				amountToString(amount2), code2, rate.FloatString(7)) 
-			fmt.Printf("Selling %s %s for %s %s, rate %s\n", amountToString(amount2), code2, 
-				amountToString(amount3), code1, rateInv.FloatString(7)) 
-			if orderid != 0 {
-				tx_updateOrder(tx, asset2, asset1, rateInv.FloatString(10), amountToString(amount2), orderid)
-			} else {
-				tx_addOrder(tx, asset2, asset1, rateInv.FloatString(10), amountToString(amount2))
-			}
-		}
-
-		transactionFinalize(acc, src, tx)
-
-		tx = tx_setup(src)
-	}
-}	
-	
 
 func transaction() {
 	menu := []MenuEntryCB{
 		{ transfer_xlm, "Transfer Native XLM", true},
 		{ createAccount, "Create New Account", true},
 		{ addTrustLine, "Create Trust Line", true},
-		{ placeOrder, "Create Order", true},
+		{ createOrder, "Create Order", true},
 		{ setInflationDestination, "Set Inflation Destination", true}}
 
 	
@@ -772,51 +678,26 @@ func fundAccount() {
 	accountInfo(adr)
 }
 
-func stellarwalletAsset2HorizonAsset(a *stellarwallet.Asset) horizon.Asset {
-	var ha horizon.Asset
 
-	if a == nil {
-		ha.Type = "native"
-	} else {
-		if len(a.AssetId()) <= 4 {
-			ha.Type = "credit_alphanum4"
-		} else {
-			ha.Type = "credit_alphanum12"
-		}
-		ha.Code = a.AssetId()
-		ha.Issuer = a.Issuer()
-	}
-
-	return ha
-}
-
-func enterAsset(prompt string) horizon.Asset {
+func enterAsset(prompt string) *Asset {
 	a, native := selectAsset(prompt, true, true)
 
-	var ha horizon.Asset
-
 	if native {
-		ha = stellarwalletAsset2HorizonAsset(nil)
+		return newNativeAsset()
 	} else if a != nil {
-		ha = stellarwalletAsset2HorizonAsset(a)
-	} else {
-		ha.Code, ha.Issuer = getAsset(prompt)
-		if len(ha.Code) <= 4 {
-			ha.Type = "credit_alphanum4"
-		} else {
-			ha.Type = "credit_alphanum12"
-		}
+		return newAssetFrom(a)
 	}
 
-	return ha
+	code, issuer := getAsset(prompt)
+	return newAsset(issuer, code)
 }
 
-func enterTradingPair(prompt string) (asset1, asset2 horizon.Asset) {
+func enterTradingPair(prompt string) (asset1, asset2 *Asset) {
 	tp := selectTradingPair(prompt, true)
 
 	if tp != nil {
-		asset1 = stellarwalletAsset2HorizonAsset(tp.Asset1())
-		asset2 = stellarwalletAsset2HorizonAsset(tp.Asset2())
+		asset1 = newAssetFrom(tp.Asset1())
+		asset2 = newAssetFrom(tp.Asset2())
 	} else {
 		asset1 = enterAsset(prompt + " Asset 1")
 		asset2 = enterAsset(prompt + " Asset 2")
@@ -825,83 +706,15 @@ func enterTradingPair(prompt string) (asset1, asset2 horizon.Asset) {
 	return
 }
 
-		
-func assetToString(a horizon.Asset) string {
-	if a.Type == "native" {
-		return "XLM"
-	} else {
-		return a.Code + "/" + a.Issuer
-	}
-
-}
-
-
 func orderBook() {
 	fmt.Println("\nShow Order Book")
 
 	selling, buying := enterTradingPair("Trading Pair")
 
-	ob, err := g_horizon.LoadOrderBook(selling, buying)
-
-	if err != nil {
-		printHorizonError("Load Order Book", err)
-		return
-	}
-
-	var table [][]string
-
-	fmt.Printf("%s --> %s\n", assetToString(ob.Selling), assetToString(ob.Buying))
-	
-	table = appendTableLine(table, "", "Bid", "Ask", "")
 	printOrderBook(selling, buying, 20)
 }
 	
 	
-func printOrderBook(asset1, asset2 horizon.Asset, maxLines int) {
-	ob, err := g_horizon.LoadOrderBook(asset1, asset2)
-
-	if err != nil {
-		printHorizonError("Load Order Book", err)
-		return
-	}
-
-	var table [][]string
-
-	table = appendTableLine(table, "", "Bid", "Ask", "")
-
-	nb := len(ob.Bids)
-	na := len(ob.Asks)
-	n := nb
-
-	if na > nb {
-		n = na
-	}
-
-	if n > maxLines {
-		n = maxLines
-	}
-	
-	for i:=0; i < n; i++ {
-		ba := ""
-		bp := ""
-		aa := ""
-		ap := ""
-
-		if i < nb {
-			ba = ob.Bids[i].Amount
-			bp = ob.Bids[i].Price
-		}
-
-		if i < na {
-			aa = ob.Asks[i].Amount
-			ap = ob.Asks[i].Price
-		}
-
-		table = appendTableLine(table, ba, bp, ap, aa)
-	}
-
-	printTable(table, 4, " ")	
-}
 
 func accountOffers() {
 	fmt.Println("Show Account Offers")
@@ -916,17 +729,14 @@ func accountOffers() {
 		adr = getAddress("Account")
 	}
 
-	offers, err := g_horizon.LoadAccountOffers(adr)
+	fmt.Printf("\nOffers for %s:\n", adr)
 
-	if err != nil {
-		printHorizonError("Load Order Book", err)
-		return
-	}
+	offers := getOffers(adr, nil, nil)
 
-	for i, _ := range offers.Embedded.Records {
-		o := &offers.Embedded.Records[i]
-
-		fmt.Printf("%d: %s --> %s: %s %s\n", o.ID, assetToString(o.Selling), assetToString(o.Buying), o.Amount, o.Price)
+	if len(offers) > 0 {
+		printOffers(offers)
+	} else {
+		fmt.Println("no offers")
 	}
 }
 
@@ -935,9 +745,10 @@ func mainMenu() {
 		{ walletMenu, "Wallet Menu", g_wallet != nil },
 		{ showAccountInfo, "Account Info", true },
 		{ accountOffers, "Show Account Offers", true},
-		{ showTransactions, "Show Account Transactions", true},
-		{ transaction, "Create Transaction", true},
 		{ orderBook, "Show Order Book", true},
+		{ trade, "Trading", true},
+		{ showTransactions, "Show Account Transactions", true},
+		{ transaction, "Primitive Transactions", true},
 		{ lookupFederation, "Federation Lookup", true},
 		{ generateVanityAddress,  "Generate New Address", true},
 		{ sign_transaction,   "Sign Transaction", true},
@@ -995,25 +806,6 @@ func main() {
 
 	mainMenu()
 
-/*
-    cursor := horizon.Cursor("now")
-
-    ctx, cancel := context.WithCancel(context.Background())
-
-    go func() {
-      // Stop streaming after 60 seconds.
-      time.Sleep(60 * time.Second)
-      cancel()
-    }()
-
-    err = client.StreamLedgers(ctx, &cursor, func(l horizon.Ledger) {
-      fmt.Println(l.Sequence)
-    })
-
-    if err != nil {
-      fmt.Println(err)
-    }
-*/
 }
 
 
