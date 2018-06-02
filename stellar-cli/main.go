@@ -20,6 +20,7 @@ import (
 	"github.com/stellar/go/clients/federation"
 	"github.com/stellar/go/clients/horizon"
 	"github.com/stellar/go/network"
+	"math/big"
 )
 
 
@@ -162,7 +163,26 @@ func federationLookup(adr string) ( id, memoType, memo string)  {
 	return
 }
 
+func showBalances() {
+	balances := make(map[*Asset]*big.Rat)
+	xlmBalance := big.NewRat(0, 1)
 
+	for _, a := range g_wallet.GetSeedAccounts() {
+		info := getAccountInfo(a.PublicKey(), false)
+		if info != nil {
+			for asset, b := range info.balances {
+				if asset.isNative() {
+					xlmBalance.Add(xlmBalance, b)
+				} else {
+					if balances[asset] == nil {
+						balances[asset] = big.NewRat(0, 1)
+					}
+					balances[asset].Add(balances[asset], b)
+				}
+			}
+		}
+	}
+}
 func accountInfo(adr string) {
 	var table [][]string
 

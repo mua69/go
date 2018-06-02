@@ -815,7 +815,7 @@ func selectTradingPair(prompt string, enterOption bool) *stellarwallet.TradingPa
 
 	for _, tp := range tps {
 		s := fmt.Sprintf("%d", choice)
-		menu = append(menu, MenuEntry{ s, newAssetFrom(tp.Asset1()).toStringPretty() + "<->" + newAssetFrom(tp.Asset2()).toStringPretty() +
+		menu = append(menu, MenuEntry{ s, newAssetFrom(tp.Asset1()).StringPretty() + "<->" + newAssetFrom(tp.Asset2()).StringPretty() +
 			" " + tp.GetDescription(), true})
 		choices = append(choices, choiceType{s, tp})
 		

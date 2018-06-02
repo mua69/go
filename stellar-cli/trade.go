@@ -15,29 +15,43 @@ type Asset struct {
 	issuer string
 }
 
+var g_assets map[string]*Asset
+var g_nativeAsset *Asset
+
 func newAsset(issuer, code string) *Asset {
-	a := &Asset{}
-	a.issuer = issuer
-	a.code = code
+	key := issuer + "/" + code
+
+	if g_assets == nil {
+		g_assets = make(map[string]*Asset)
+	}
+
+	a := g_assets[key]
+
+	if a == nil {
+		a = &Asset{code, issuer}
+		g_assets[key] = a
+	}
 
 	return a
 }
 
 func newNativeAsset() *Asset {
-	return &Asset{}
+	if g_nativeAsset == nil {
+		g_nativeAsset = &Asset{}
+	}
+
+	return g_nativeAsset
 }
 
-func newAssetFrom(asset interface{}) *Asset {
-	switch asset.(type) {
+func newAssetFrom(a interface{}) *Asset {
+	switch a := a.(type) {
 	case *stellarwallet.Asset:
-		a := asset.(*stellarwallet.Asset)
 		if a == nil {
 			return newNativeAsset()
 		} else {
 			return newAsset(a.Issuer(), a.AssetId())
 		}
 	case horizon.Asset:
-		a := asset.(horizon.Asset)
 		if a.Type == "native" {
 			return newNativeAsset()
 		} else {
@@ -67,7 +81,7 @@ func (a1 *Asset)isEqual(a2 *Asset) bool {
 	return false
 }
 
-func (a* Asset)toString() string {
+func (a* Asset)String() string {
 	if a.isNative() {
 		return "XLM"
 	}
@@ -75,7 +89,7 @@ func (a* Asset)toString() string {
 	return a.code +  "/" + a.issuer
 }
 
-func (a* Asset)toStringPretty() string {
+func (a* Asset)StringPretty() string {
 	if a.isNative() {
 		return "XLM"
 	}
@@ -209,9 +223,9 @@ func (offer *Offer)string() string {
 	}
 
 	return fmt.Sprintf("%s: %s %s %s %s %s, price %s, ID %d", s1,
-			amountToString(offer.amount1), offer.asset1.toStringPretty(),
+			amountToString(offer.amount1), offer.asset1.StringPretty(),
 			s2,
-			amountToString(offer.amount2), offer.asset2.toStringPretty(),
+			amountToString(offer.amount2), offer.asset2.StringPretty(),
 			offer.price.FloatString(7), offer.orderid)
 }
 
@@ -329,7 +343,7 @@ func trade() {
 	var orderid uint64
 	orderid = 0
 
-	fmt.Printf("\n%s <=> %s\n", asset1.toStringPretty(), asset2.toStringPretty())
+	fmt.Printf("\n%s <=> %s\n", asset1.StringPretty(), asset2.StringPretty())
 
 	for {
 
