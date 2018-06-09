@@ -17,8 +17,10 @@ import (
 	"github.com/stellar/go/price"
 	"github.com/stellar/go/amount"
 	"github.com/stellar/go/address"
-	"github.com/stellar/go/xdr"
 	"github.com/mua69/stellarwallet"
+	"math/big"
+	"github.com/stellar/go/clients/horizon"
+	"github.com/stellar/go/xdr"
 )
 
 
@@ -270,8 +272,20 @@ func getPayment(prompt string) (string) {
 	return amount
 }
 
+func priceToRat(price interface{}) *big.Rat {
+	switch price.(type) {
+	case horizon.Price:
+		p := price.(horizon.Price)
+		return big.NewRat(int64(p.N), int64(p.D))
+	case xdr.Price:
+		p := price.(xdr.Price)
+		return big.NewRat(int64(p.N), int64(p.D))
+	}
+
+	return nil
+}
 // read price from terminal
-func getPrice(prompt string) xdr.Price {
+func getPrice(prompt string) *big.Rat {
 	in := bufio.NewReader(os.Stdin)
 
 	for {
@@ -287,13 +301,18 @@ func getPrice(prompt string) xdr.Price {
 		if err != nil {
 			fmt.Println("Invalid price.")
 		} else {
-			return p
+			return priceToRat(p)
 		}
 	}
 }
 
+func amountToRat(a string) *big.Rat {
+	amnt := amount.MustParse(a)
+	return big.NewRat(int64(amnt), 1)
+}
+
 // read amount from the terminal
-func getAmount(prompt string) xdr.Int64 {
+func getAmount(prompt string) *big.Rat {
 	in := bufio.NewReader(os.Stdin)
 
 	for {
@@ -305,11 +324,11 @@ func getAmount(prompt string) xdr.Int64 {
 		}
 		input = strings.TrimSpace(input)
 
-		amnt, err := amount.Parse(input)
+		_, err = amount.Parse(input)
 		if err != nil {
 			fmt.Println("Invalid amount.")
 		} else {
-			return amnt
+			return amountToRat(input)
 		}
 	}
 }

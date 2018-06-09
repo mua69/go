@@ -103,7 +103,7 @@ func createNewWallet() {
 
 	g_wallet = stellarwallet.NewWallet(&pw)
 
-	words := g_wallet.GetBip39Mnemonic(&pw)
+	words := g_wallet.Bip39Mnemonic(&pw)
 
 	fmt.Println("Mnemonic word list required to recover the wallet. Please copy and store in a safe place:")
 	
@@ -124,7 +124,7 @@ func createNewWallet() {
 		panic("Generation of wallet seed failed")
 	}
 
-	if g_wallet.GenerateSep0005Account(&pw) == nil {
+	if g_wallet.GenerateAccount(&pw) == nil {
 		panic("Failed to generate account")
 	}
 
@@ -221,7 +221,7 @@ func recoverWallet() {
 	}
 	
 	
-	if g_wallet.GenerateSep0005Account(&pw) == nil {
+	if g_wallet.GenerateAccount(&pw) == nil {
 		panic("Failed to generate account")
 	}
 
@@ -306,17 +306,17 @@ func accountTypeToString(a *stellarwallet.Account) string {
 	
 
 func listWallet() {
-	accounts := g_wallet.GetAccounts()
+	accounts := g_wallet.Accounts()
 
 //	var table [][]string	
 
 	fmt.Println("Accounts:")
 	for _, a := range accounts {
-		fmt.Printf("%s: %s %s\n", accountTypeToString(a), a.PublicKey(), a.GetDescription())
-		if a.GetMemoText() != "" {
-			fmt.Printf("   Memo Text: %s\n", a.GetMemoText())
+		fmt.Printf("%s: %s %s\n", accountTypeToString(a), a.PublicKey(), a.Description())
+		if a.MemoText() != "" {
+			fmt.Printf("   Memo Text: %s\n", a.MemoText())
 		}
-		memoIdSet, memoId := a.GetMemoId()
+		memoIdSet, memoId := a.MemoId()
 		if memoIdSet {
 			fmt.Printf("   Memo ID: %d\n", memoId)
 		}
@@ -340,11 +340,11 @@ func listWallet() {
 }
 
 func listAssets() {
-	assets := g_wallet.GetAssets()
+	assets := g_wallet.Assets()
 
 	fmt.Println("\nAssets:")
 	for _, a := range assets {
-		fmt.Printf("%s/%s %s\n", a.AssetId(), a.Issuer(), a.GetDescription()) 
+		fmt.Printf("%s/%s %s\n", a.AssetId(), a.Issuer(), a.Description()) 
 	}
 }
 
@@ -457,7 +457,7 @@ func generateAccount() {
 	unlockWallet()
 	defer unlockWalletPassword()
 
-	a := g_wallet.GenerateSep0005Account(&g_walletPassword)
+	a := g_wallet.GenerateAccount(&g_walletPassword)
 
 	if a != nil {
 		fmt.Printf("New account: %s\n", a.PublicKey())
@@ -525,7 +525,7 @@ func selectAccount(prompt string, enterAccountOption bool, accounts []*stellarwa
 	}
 
 	for _, a := range accounts {
-		menu = append(menu, MenuEntry{ a.PublicKey(), accountTypeToString(a) + ": " + a.PublicKey() + " " + a.GetDescription(), true})
+		menu = append(menu, MenuEntry{ a.PublicKey(), accountTypeToString(a) + ": " + a.PublicKey() + " " + a.Description(), true})
 	}
 
 	fmt.Println(prompt + ":")
@@ -546,7 +546,7 @@ func selectAccount(prompt string, enterAccountOption bool, accounts []*stellarwa
 
 func selectSeedAccount(prompt string, enterAccountOption bool) *stellarwallet.Account {
 	if g_wallet != nil {
-		return selectAccount(prompt, enterAccountOption, g_wallet.GetSeedAccounts())
+		return selectAccount(prompt, enterAccountOption, g_wallet.SeedAccounts())
 	} else {
 		return nil
 	}
@@ -554,8 +554,8 @@ func selectSeedAccount(prompt string, enterAccountOption bool) *stellarwallet.Ac
 
 func selectAnyAccount(prompt string, enterAccountOption bool) *stellarwallet.Account {
 	if g_wallet != nil {
-		accounts := g_wallet.GetAccounts()
-		accounts = append(accounts, g_wallet.GetAddressBook()...)
+		accounts := g_wallet.Accounts()
+		accounts = append(accounts, g_wallet.AddressBook()...)
 		return selectAccount(prompt, enterAccountOption, accounts)
 	} else {
 		return nil
@@ -568,7 +568,7 @@ func deleteAccount() {
 	if a == nil { return }
 
 	pubkey := a.PublicKey()
-	fmt.Printf("Deleting account %s %s...\n", pubkey, a.GetDescription())
+	fmt.Printf("Deleting account %s %s...\n", pubkey, a.Description())
 	if getOk("Delete Account") {
 		
 		if !g_wallet.DeleteAccount(a) {
@@ -612,7 +612,7 @@ func selectAsset(prompt string, enterAssetOption, nativeOption bool) (selectedAs
 		return nil, false
 	}
 
-	assets := g_wallet.GetAssets()
+	assets := g_wallet.Assets()
 
 	if len(assets) == 0 && !nativeOption {
 		return nil, false
@@ -644,7 +644,7 @@ func selectAsset(prompt string, enterAssetOption, nativeOption bool) (selectedAs
 
 	for _, a := range assets {
 		s := fmt.Sprintf("%d", choice)
-		menu = append(menu, MenuEntry{ s, a.AssetId() + "/" + a.Issuer() + " " + a.GetDescription(), true})
+		menu = append(menu, MenuEntry{ s, a.AssetId() + "/" + a.Issuer() + " " + a.Description(), true})
 		choices = append(choices, choiceType{s, a, false})
 		
 		choice++
@@ -687,7 +687,7 @@ func deleteAsset() {
 	a, _ := selectAsset("Select Asset to Delete", false, false)
 
 	if a != nil {
-		fmt.Printf("Deleting Asset %s/%s %s...\n", a.AssetId(), a.Issuer(), a.GetDescription())
+		fmt.Printf("Deleting Asset %s/%s %s...\n", a.AssetId(), a.Issuer(), a.Description())
 		if getOk("Delete Asset") {
 		
 			if !g_wallet.DeleteAsset(a) {
@@ -723,11 +723,11 @@ func tradingPairMenu() {
 
 func listTradingPairs() {
 	fmt.Println("\nTrading Pairs:")
-	tps := g_wallet.GetTradingPairs()
+	tps := g_wallet.TradingPairs()
 
 	for _, tp := range(tps) {
 		fmt.Printf("%s<->%s %s\n", assetToStringPretty(tp.Asset1()), assetToStringPretty(tp.Asset2()), 
-			tp.GetDescription())
+			tp.Description())
 	}
 }
 
@@ -770,23 +770,27 @@ func addTradingPair() {
 	fmt.Println("New trading pair successfully defined.")
 }
 
+func abbreviateIssuer(s string) string {
+	return s[:5] + "..." + s[len(s)-5:]
+}
+
 func assetToStringPretty(a *stellarwallet.Asset) string {
 	if a == nil {
 		return "XLM"
 	}
 
-	issuer := a.Issuer()[:10] + "..." + a.Issuer()[len(a.Issuer())-10:]
-	s := a.AssetId() +  "/" + issuer
+	s := a.AssetId() +  "/" + abbreviateIssuer(a.Issuer())
 
 	return s
 }
+
 
 func selectTradingPair(prompt string, enterOption bool) *stellarwallet.TradingPair {
 	if g_wallet == nil {
 		return nil
 	}
 
-	tps := g_wallet.GetTradingPairs()
+	tps := g_wallet.TradingPairs()
 
 	if len(tps) == 0 {
 		return nil
@@ -811,8 +815,8 @@ func selectTradingPair(prompt string, enterOption bool) *stellarwallet.TradingPa
 
 	for _, tp := range tps {
 		s := fmt.Sprintf("%d", choice)
-		menu = append(menu, MenuEntry{ s, assetToStringPretty(tp.Asset1()) + "<->" + assetToStringPretty(tp.Asset2()) +
-			" " + tp.GetDescription(), true})
+		menu = append(menu, MenuEntry{ s, newAssetFrom(tp.Asset1()).StringPretty() + "<->" + newAssetFrom(tp.Asset2()).StringPretty() +
+			" " + tp.Description(), true})
 		choices = append(choices, choiceType{s, tp})
 		
 		choice++

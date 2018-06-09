@@ -201,24 +201,22 @@ func tx_addTrustLine( tx *build.TransactionBuilder, asset horizon.Asset) {
 	tx.Mutate(build.Trust(asset.Code, asset.Issuer))
 }
 
-func horizonAssetToBuildAsset(a horizon.Asset) build.Asset {
-	if a.Type == "native" {
-		return build.NativeAsset()
+func amountToString(a *big.Rat) string {
+	r := big.Rat{}
+	r.Quo(a, big.NewRat(amount.One, 1))
+
+	return r.FloatString(7)
+}
+
+func tx_addOrder(tx *build.TransactionBuilder, selling, buying *Asset, price, amount *big.Rat, orderid uint64) {
+	rate := build.Rate{selling.toBuildAsset(), buying.toBuildAsset(),
+	build.Price(price.FloatString(10))}
+
+	if orderid == 0 {
+		tx.Mutate(build.CreateOffer(rate, build.Amount(amountToString(amount))))
 	} else {
-		return build.CreditAsset(a.Code, a.Issuer)
+		tx.Mutate(build.UpdateOffer(rate, build.Amount(amountToString(amount)), build.OfferID(orderid)))
 	}
-}
-
-func tx_addOrder(tx *build.TransactionBuilder, selling, buying horizon.Asset, price, amount string) {
-	tx.Mutate(build.CreateOffer(build.Rate{horizonAssetToBuildAsset(selling),
-		horizonAssetToBuildAsset(buying), build.Price(price)},
-		build.Amount(amount)))
-}
-
-func tx_updateOrder(tx *build.TransactionBuilder, selling, buying horizon.Asset, price, amount string, orderid uint64) {
-	tx.Mutate(build.UpdateOffer(build.Rate{horizonAssetToBuildAsset(selling),
-		horizonAssetToBuildAsset(buying), build.Price(price)},
-		build.Amount(amount), build.OfferID(orderid)))
 }
 
 func tx_memoText( tx *build.TransactionBuilder, memoText string ) {
