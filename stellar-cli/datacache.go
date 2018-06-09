@@ -61,6 +61,7 @@ func getAccountInfo(id string, force bool) *AccountInfo {
 
 	if d.exists {
 		d.horizonData = &acc
+		d.balances = make(map[*Asset]*big.Rat)
 
 		for _, b := range acc.Balances {
 			var a *Asset
