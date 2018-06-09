@@ -167,8 +167,8 @@ func showBalances() {
 	balances := make(map[*Asset]*big.Rat)
 	xlmBalance := big.NewRat(0, 1)
 
-	for _, a := range g_wallet.GetSeedAccounts() {
-		info := getAccountInfo(a.PublicKey(), false)
+	for _, a := range g_wallet.SeedAccounts() {
+		info := getAccountInfo(a.PublicKey(), true)
 		if info != nil {
 			for asset, b := range info.balances {
 				if asset.isNative() {
@@ -182,7 +182,28 @@ func showBalances() {
 			}
 		}
 	}
+
+	var table [][]string
+
+	maxLen := len(amountToString(xlmBalance))
+	for _, b := range balances {
+		l := len(amountToString(b))
+		if l > maxLen {
+			maxLen = l
+		}
+	} 
+
+
+	table = appendTableLine(table, "XLM", fmt.Sprintf("%*s", maxLen, amountToString(xlmBalance)))
+	
+	for a, b := range balances {
+		table = appendTableLine(table, a.StringPretty(), fmt.Sprintf("%*s", maxLen, amountToString(b)))
+	} 
+
+	fmt.Println("Balances:")
+	printTable(table, 2, ": ")
 }
+
 func accountInfo(adr string) {
 	var table [][]string
 
@@ -763,6 +784,7 @@ func accountOffers() {
 func mainMenu() {
 	menu := []MenuEntryCB{
 		{ walletMenu, "Wallet Menu", g_wallet != nil },
+		{ showBalances, "Balances", g_wallet != nil },
 		{ showAccountInfo, "Account Info", true },
 		{ accountOffers, "Show Account Offers", true},
 		{ orderBook, "Show Order Book", true},
