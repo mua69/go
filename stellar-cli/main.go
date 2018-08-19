@@ -364,6 +364,14 @@ func enterNativePayment(tx *build.TransactionBuilder) {
 	tx_payment(tx, dst, amount)
 }	
 
+func enterPaymentAsset(tx *build.TransactionBuilder) {
+	asset := enterAsset("")
+	dst := enterDestinationAccount("Destination")
+	amount := getAmount(asset.codeToString())
+
+	tx_payment_asset(tx, dst, asset, amount)
+}
+
 func enterCreateAccount(tx *build.TransactionBuilder) {
 
 	dst :=      enterDestinationAccount("Destination (new account)")
@@ -537,6 +545,16 @@ func transfer_xlm() {
 	transactionFinalize(acc, src, tx)
 }
 
+func transfer_asset() {
+	acc, src, tx := enterSourceAccount()
+
+	enterPaymentAsset(tx)
+
+	enterMemo(tx)
+
+	transactionFinalize(acc, src, tx)
+}
+
 func createAccount() {
 	acc, src, tx := enterSourceAccount()
 
@@ -685,6 +703,7 @@ func createOrder() {
 func transaction() {
 	menu := []MenuEntryCB{
 		{ transfer_xlm, "Transfer Native XLM", true},
+		{ transfer_asset, "Transfer Asset", true},
 		{ createAccount, "Create New Account", true},
 		{ addTrustLine, "Create Trust Line", true},
 		{ createOrder, "Create Order", true},

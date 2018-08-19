@@ -81,6 +81,14 @@ func (a1 *Asset)isEqual(a2 *Asset) bool {
 	return false
 }
 
+func (a* Asset)Issuer() string {
+	return a.issuer
+}
+
+func (a* Asset)Code() string {
+	return a.code
+}
+
 func (a* Asset)String() string {
 	if a.isNative() {
 		return "XLM"

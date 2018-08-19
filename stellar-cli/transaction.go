@@ -193,6 +193,12 @@ func tx_payment( tx *build.TransactionBuilder, dst string, amount string) {
 		build.NativeAmount{amount}))
 }
 
+func tx_payment_asset( tx *build.TransactionBuilder, dst string, asset *Asset, amount *big.Rat) {
+	tx.Mutate(build.Payment(
+		build.Destination{dst},
+		build.CreditAmount{asset.Code(), asset.Issuer(), amountToString(amount)}))
+}
+
 func tx_inflationDestination( tx *build.TransactionBuilder, dst string) {
 	tx.Mutate(build.SetOptions(build.InflationDest(dst)))
 }
