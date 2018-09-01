@@ -1,23 +1,23 @@
 package main
 
 import (
-	"errors"
-	"os"
-	"fmt"
-	"io"
-	"bufio"
-	"strings"
-	"strconv"
-	"encoding/hex"
-	"encoding/json"
-	"math"
-	"math/big"
-	"github.com/stellar/go/build"
-	"github.com/stellar/go/xdr"
 	"github.com/stellar/go/clients/horizon"
-	"github.com/stellar/go/strkey"
-	"github.com/stellar/go/amount"
 	"github.com/stellar/go/keypair"
+	"strings"
+	"fmt"
+	"encoding/json"
+	"github.com/stellar/go/build"
+	"strconv"
+	"math/big"
+	"github.com/stellar/go/amount"
+	"github.com/stellar/go/xdr"
+	"github.com/stellar/go/strkey"
+	"math"
+	"encoding/hex"
+	"io"
+	"os"
+	"bufio"
+	"github.com/pkg/errors"
 )
 
 
@@ -39,15 +39,6 @@ func loadAccount(adr string) (*horizon.Account, error) {
 
 	return &acc, nil
 }
-
-/*
-type TxObject struct {
-	Embedded struct {
-		Records []horizon.Transaction
-	} `json:"_embedded"`
-}
-*/
-
 func getAccountTransactions(adr string, cnt int, pagingTokenIn string) (txs []horizon.Transaction, pagingTokenOut string, err error) {
 	if cnt <= 0 {
 		return
@@ -118,7 +109,7 @@ func getAccountTransactions(adr string, cnt int, pagingTokenIn string) (txs []ho
 	
 	if n >= cnt {
 		// there are probably more transaction records, return paging token of last transaction
-		pagingTokenOut = obj.Embedded.Records[n-1].PagingToken
+		pagingTokenOut = obj.Embedded.Records[n-1].PT
 	}
 
 	txs = obj.Embedded.Records
@@ -207,12 +198,21 @@ func tx_addTrustLine( tx *build.TransactionBuilder, asset horizon.Asset) {
 	tx.Mutate(build.Trust(asset.Code, asset.Issuer))
 }
 
+
 func amountToString(a *big.Rat) string {
 	r := big.Rat{}
 	r.Quo(a, big.NewRat(amount.One, 1))
 
 	return r.FloatString(7)
 }
+
+func amountToStringPretty(a *big.Rat) string {
+	r := big.Rat{}
+	r.Quo(a, big.NewRat(amount.One, 1))
+
+	return r.FloatString(2)
+}
+
 
 func tx_addOrder(tx *build.TransactionBuilder, selling, buying *Asset, price, amount *big.Rat, orderid uint64) {
 	rate := build.Rate{selling.toBuildAsset(), buying.toBuildAsset(),
