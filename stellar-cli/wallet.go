@@ -326,7 +326,8 @@ func listWallet() {
 				printHorizonError("load account", err)
 			} else {
 				if ai != nil {
-					fmt.Printf("   XLM: %s\n", ai.GetNativeBalance())
+					nb, _ := ai.GetNativeBalance()
+					fmt.Printf("   XLM: %s\n", nb)
 
 				} else {
 					fmt.Printf("   Not funded\n")
