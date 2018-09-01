@@ -762,3 +762,89 @@ func runCallbackMenu(menu []MenuEntryCB, prompt string, loop bool) {
 	}
 }
 
+type CliTable struct {
+	cols int
+	lines [][]string
+	justification []int
+	separator []string
+	columnWidths []int
+	prefix string
+	fp io.Writer
+}
+
+const CliTableJustificationLeft = 0
+const CliTableJustificationRight = 1
+const CliTableJustificationCenter = 2
+
+func newCliTable(cols int) *CliTable {
+	t := new(CliTable)
+	if cols < 1 {
+		panic(fmt.Sprintf("invalid number of columns: %s", cols))
+	}
+	t.cols = cols
+	t.fp = os.Stdout
+	t.justification = make([]int, cols)
+	t.separator = make([]string, cols)
+	t.lines = make([][]string, 0, 20)
+	t.columnWidths = make([]int, cols)
+
+	for i := 0; i < cols; i++ {
+		t.justification[i] = CliTableJustificationLeft
+		t.separator[i] = " "
+	}
+
+	return t
+}
+
+func (t *CliTable)appendLine(s... string) {
+	t.lines = append(t.lines, s)
+
+	for i := range s {
+		if i < t.cols {
+			l := utf8.RuneCountInString(s[i])
+			if l > t.columnWidths[i] {
+				t.columnWidths[i] = l
+			}
+		}
+	}
+}
+
+func (t *CliTable)setJustification(justification... int) {
+	for i := range justification {
+		if i < t.cols {
+			t.justification[i] = justification[i]
+		}
+	}
+}
+
+func (t *CliTable)setSeparator(sep... string) {
+	for i := range sep {
+		if i < t.cols {
+			t.separator[i] = sep[i]
+		}
+	}
+}
+
+func (t *CliTable)print() {
+	for l := range t.lines {
+		line := t.lines[l]
+		fmt.Fprintf(t.fp, "%s", t.prefix)
+		for c := range line {
+			if c < t.cols {
+				len := utf8.RuneCountInString(line[c])
+				n := t.columnWidths[c] - len
+				switch t.justification[c] {
+				case CliTableJustificationRight:
+					fmt.Fprintf(t.fp, "%s%s", strings.Repeat(" ", n), line[c])
+				case CliTableJustificationCenter:
+					n1 := n/2
+					fmt.Fprintf(t.fp, "%s%s", strings.Repeat(" ", n1), line[c], strings.Repeat(" ", n-n1))
+				default:
+					fmt.Fprintf(t.fp, "%s%s", line[c], strings.Repeat(" ",  n))
+				}
+				fmt.Fprintf(t.fp, "%s", t.separator[c])
+			}
+		}
+		fmt.Fprintf(t.fp, "\n")
+	}
+}
