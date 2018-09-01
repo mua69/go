@@ -21,8 +21,15 @@ import (
 	"github.com/stellar/go/clients/horizon"
 	"github.com/stellar/go/network"
 	"math/big"
+	"sort"
 )
 
+const (
+	ReferenceCurrencyNone = 0
+	ReferenceCurrencyEUR = 1
+	ReferenceCurrencyUSD = 2
+	ReferenceCurrencyBTC = 3
+)
 
 var (
 	g_network= build.TestNetwork
@@ -49,6 +56,11 @@ var (
 	g_horizonUrl = ""
 	g_testnet = false
 	g_noWallet bool
+
+	// settings
+	gReferenceCurrency = ReferenceCurrencyEUR
+
+	gRatZero = big.NewRat(0, 1)
 )
 
 
@@ -164,11 +176,14 @@ func federationLookup(adr string) ( id, memoType, memo string)  {
 }
 
 func showBalances() {
+
 	balances := make(map[*Asset]*big.Rat)
-	xlmBalance := big.NewRat(0, 1)
+	xlmBalance := new(big.Rat)
+	xlmValue := new(big.Rat)
+	refCurrValue := new(big.Rat)
 
 	for _, a := range g_wallet.SeedAccounts() {
-		info := getAccountInfo(a.PublicKey(), true)
+		info := getAccountInfo(a.PublicKey(), CacheTimeoutShort)
 		if info != nil {
 			for asset, b := range info.balances {
 				if asset.isNative() {
@@ -183,25 +198,76 @@ func showBalances() {
 		}
 	}
 
-	var table [][]string
+	type balancesListEntry struct {
+		a *Asset
+		b *big.Rat
+	}
 
-	maxLen := len(amountToString(xlmBalance))
-	for _, b := range balances {
-		l := len(amountToString(b))
-		if l > maxLen {
-			maxLen = l
-		}
-	} 
-
-
-	table = appendTableLine(table, "XLM", fmt.Sprintf("%*s", maxLen, amountToString(xlmBalance)))
-	
+	sortedBalances := make([]balancesListEntry, 0, len(balances))
 	for a, b := range balances {
-		table = appendTableLine(table, a.StringPretty(), fmt.Sprintf("%*s", maxLen, amountToString(b)))
+		sortedBalances = append(sortedBalances, balancesListEntry{a, b})
+	}
+
+	sort.Slice(sortedBalances, func(i ,j int) bool { return sortedBalances[i].a.String() < sortedBalances[j].a.String() })
+
+
+	refCurrencyPrice := getReferenceCurrencyPrice(CacheTimeoutMedium)
+	var printRefCurrencyValue func(*big.Rat) string
+
+	if refCurrencyPrice != nil {
+		printRefCurrencyValue = func(xlm *big.Rat) string {
+			v := new(big.Rat)
+			v.Mul(xlm, refCurrencyPrice.price)
+			return amountToStringPretty(v) + " " + refCurrencyPrice.name
+		}
+	} else {
+		printRefCurrencyValue = func(rat *big.Rat) string {
+			return ""
+		}
+	}
+
+	table := newCliTable(4)
+	table.setJustification(CliTableJustificationLeft, CliTableJustificationRight, CliTableJustificationRight,
+		CliTableJustificationRight)
+	table.setSeparator(": ")
+
+	xlm := newNativeAsset()
+
+	xlmValue.Add(xlmValue, xlmBalance)
+
+	if refCurrencyPrice != nil {
+		v := new(big.Rat)
+		v.Mul(xlmBalance, refCurrencyPrice.price)
+		refCurrValue.Add(refCurrValue, v)
+	}
+	table.appendLine("XLM", amountToStringPretty(xlmBalance), "", printRefCurrencyValue(xlmBalance))
+
+
+	for i := range sortedBalances {
+		a := sortedBalances[i].a
+		b := sortedBalances[i].b
+
+		_, sellPrice := getAverageAssetPrice(a, xlm, b, CacheTimeoutMedium)
+		//xlmBuy := new(big.Rat).Mul(buyPrice, b)
+		xlmSell := new(big.Rat).Mul(sellPrice, b)
+		xlmValue.Add(xlmValue, xlmSell)
+		if refCurrencyPrice != nil {
+			v := new(big.Rat)
+			v.Mul(xlmSell, refCurrencyPrice.price)
+			refCurrValue.Add(refCurrValue, v)
+		}
+		table.appendLine(a.StringPretty(), amountToStringPretty(b), amountToStringPretty(xlmSell)+" XLM",
+			printRefCurrencyValue(xlmSell))
 	} 
+
+	table.appendLine("Total XLM Value", amountToStringPretty(xlmValue))
+	if refCurrencyPrice != nil {
+		table.appendLine(fmt.Sprintf("Total %s Value", refCurrencyPrice.name),
+			amountToStringPretty(refCurrValue))
+	}
 
 	fmt.Println("Balances:")
-	printTable(table, 2, ": ")
+	table.print()
 }
 
 func accountInfo(adr string) {
@@ -229,8 +295,9 @@ func accountInfo(adr string) {
 		}
 	}
 
-	table = appendTableLine(table, "Balance (XLM)", fmt.Sprintf("%*s", maxBalanceStringLen,
-		acc.GetNativeBalance()))
+	nb, _ := acc.GetNativeBalance()
+
+	table = appendTableLine(table, "Balance (XLM)", fmt.Sprintf("%*s", maxBalanceStringLen, nb))
 	for i, _ := range acc.Balances {
 		as := &acc.Balances[i]
 		if as.Asset.Code != "" {
@@ -771,7 +838,7 @@ func orderBook() {
 
 	selling, buying := enterTradingPair("Trading Pair")
 
-	printOrderBook(selling, buying, 20)
+	printOrderBook(selling, buying, 20, CacheTimeoutForce)
 }
 	
 	
