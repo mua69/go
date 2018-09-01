@@ -101,7 +101,7 @@ func createNewWallet() {
 	fmt.Println("Creating new wallet...")
 	getPasswordWithConfirmation("Wallet Password", true, &pw)
 
-	g_wallet = stellarwallet.NewWallet(&pw)
+	g_wallet = stellarwallet.NewWallet(0, &pw)
 
 	words := g_wallet.Bip39Mnemonic(&pw)
 
@@ -213,7 +213,7 @@ func recoverWallet() {
 
 		getPasswordWithConfirmation("Mnemonic Password", false, &wpw)
 
-		g_wallet = stellarwallet.NewWalletFromMnemonic(&pw, words, &wpw)
+		g_wallet = stellarwallet.NewWalletFromMnemonic(0, &pw, words, &wpw)
 
 		if g_wallet == nil {
 			fmt.Println("Invalid mnemonic words.")
