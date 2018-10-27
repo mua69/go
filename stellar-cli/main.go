@@ -892,19 +892,21 @@ func walletPasswordResetDaemon() {
 	for {
 		time.Sleep(time.Second)
 
-		g_walletPasswordLockMutex.Lock()
-		if g_walletPasswordLock == 0 {
-			if g_walletPassword != "" {
-				if time.Since(g_walletPasswordUnlockTime) >= time.Duration(g_walletPasswordLockDuration) * time.Second {
-					fmt.Println("Cleared wallet password.")
-					stellarwallet.EraseString(&g_walletPassword)
-					g_walletPassword = ""
+		if g_walletPasswordLockDuration > 0 {
+			g_walletPasswordLockMutex.Lock()
+			if g_walletPasswordLock == 0 {
+				if g_walletPassword != "" {
+					if time.Since(g_walletPasswordUnlockTime) >= time.Duration(g_walletPasswordLockDuration)*time.Second {
+						fmt.Println("Cleared wallet password.")
+						stellarwallet.EraseString(&g_walletPassword)
+						g_walletPassword = ""
+					}
 				}
+
 			}
 
+			g_walletPasswordLockMutex.Unlock()
 		}
-
-		g_walletPasswordLockMutex.Unlock()
 	}
 
 
