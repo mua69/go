@@ -398,7 +398,7 @@ func enterDestinationAccount(prompt string) string {
 func enterSigners(acc *stellarwallet.Account, key string, tx *build.TransactionBuilder) (bool, build.TransactionEnvelopeBuilder) {
 
 	if acc != nil {
-		unlockWallet()
+		unlockWallet(false)
 		key = acc.PrivateKey(&g_walletPassword)
 		unlockWalletPassword()
 	} 
