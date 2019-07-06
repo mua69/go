@@ -214,9 +214,20 @@ func amountToStringPretty(a *big.Rat) string {
 }
 
 
-func tx_addOrder(tx *build.TransactionBuilder, selling, buying *Asset, price, amount *big.Rat, orderid uint64) {
+func tx_addSellOrder(tx *build.TransactionBuilder, selling, buying *Asset, price, amount *big.Rat, orderid uint64) {
 	rate := build.Rate{selling.toBuildAsset(), buying.toBuildAsset(),
 	build.Price(price.FloatString(10))}
+
+	if orderid == 0 {
+		tx.Mutate(build.CreateOffer(rate, build.Amount(amountToString(amount))))
+	} else {
+		tx.Mutate(build.UpdateOffer(rate, build.Amount(amountToString(amount)), build.OfferID(orderid)))
+	}
+}
+
+func tx_addBuyOrder(tx *build.TransactionBuilder, buying, selling *Asset, price, amount *big.Rat, orderid uint64) {
+	rate := build.Rate{selling.toBuildAsset(), buying.toBuildAsset(),
+		build.Price(price.FloatString(10))}
 
 	if orderid == 0 {
 		tx.Mutate(build.CreateOffer(rate, build.Amount(amountToString(amount))))
@@ -319,9 +330,15 @@ func changeTrustOpToString(op *xdr.ChangeTrustOp) string {
 	return s
 }
 
-func manageOfferOpToString(op *xdr.ManageOfferOp) string {
+func manageSellOfferOpToString(op *xdr.ManageSellOfferOp) string {
 	return "SELL:" + xdrAssetToString(op.Selling) + " BUY:" + xdrAssetToString(op.Buying) +
 		" AMOUNT:" + amount.StringFromInt64(int64(op.Amount)) +
+		" PRICE:" + op.Price.String() + " ID:" + fmt.Sprintf("%d", op.OfferId)
+}
+
+func manageBuyOfferOpToString(op *xdr.ManageBuyOfferOp) string {
+	return "BUY:" + xdrAssetToString(op.Buying) + " SELL:" + xdrAssetToString(op.Selling) +
+		" AMOUNT:" + amount.StringFromInt64(int64(op.BuyAmount)) +
 		" PRICE:" + op.Price.String() + " ID:" + fmt.Sprintf("%d", op.OfferId)
 }
 
@@ -446,11 +463,15 @@ func opToString( op xdr.Operation ) ( opType, opContent string) {
 	case xdr.OperationTypePathPayment:
 		opType = "Path Payment"
 
-	case xdr.OperationTypeManageOffer:
-		opType = "Manage Offer"
-		opContent += manageOfferOpToString(op.Body.ManageOfferOp)
+	case xdr.OperationTypeManageSellOffer:
+		opType = "Manage Sell Offer"
+		opContent += manageSellOfferOpToString(op.Body.ManageSellOfferOp)
 
-	case xdr.OperationTypeCreatePassiveOffer:
+	case xdr.OperationTypeManageBuyOffer:
+		opType = "Manage Buy Offer"
+		opContent += manageBuyOfferOpToString(op.Body.ManageBuyOfferOp)
+
+	case xdr.OperationTypeCreatePassiveSellOffer:
 		opType = "Create Passive Offer"
 
 	case xdr.OperationTypeSetOptions:

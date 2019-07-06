@@ -500,14 +500,14 @@ func trade() {
 			fmt.Printf("Selling %s %s for %s %s, rate %s\n", amountToString(amount1), code1,
 				amountToString(amount2), code2, rate.FloatString(7))
 
-			tx_addOrder(tx, asset1, asset2, rate, amount1, orderid)
+			tx_addSellOrder(tx, asset1, asset2, rate, amount1, orderid)
 		} else {
 			fmt.Printf("Buying %s %s with %s %s, rate %s\n", amountToString(amount1), code1,
 				amountToString(amount2), code2, rate.FloatString(7))
 			fmt.Printf("Selling %s %s for %s %s, rate %s\n", amountToString(amount2), code2,
 				amountToString(amount3), code1, rateInv.FloatString(7))
 
-			tx_addOrder(tx, asset2, asset1, rateInv, amount2, orderid)
+			tx_addSellOrder(tx, asset2, asset1, rateInv, amount2, orderid)
 		}
 
 		transactionFinalize(acc, src, tx)

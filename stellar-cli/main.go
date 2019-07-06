@@ -46,7 +46,7 @@ var (
 	g_walletPassword string
 	g_walletPasswordLock = 0
 	g_walletPasswordLockMutex sync.Mutex
-	g_walletPasswordLockDuration = 120 // password lock duration in seconds
+	g_walletPasswordLockDuration = 300 // password lock duration in seconds
 	g_walletPasswordUnlockTime time.Time
 
 	// command line flags
@@ -79,7 +79,7 @@ func setupNetwork() {
 	} else {
 		g_network = build.PublicNetwork 	
 		g_horizon = &horizon.Client{
-			URL:  "https://horizon.stellarport.earth/",
+			URL:  "https://horizon.crymel.icu/",
 			HTTP: http.DefaultClient,
 		}
 	}
@@ -758,7 +758,7 @@ func createOrder() {
 	price := getPrice("Price")
 	amount := getAmount("Amount")
 
-	tx_addOrder(tx, selling, buying, price, amount, 0)
+	tx_addSellOrder(tx, selling, buying, price, amount, 0)
 	
 	enterMemo(tx)
 

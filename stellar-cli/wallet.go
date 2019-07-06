@@ -114,7 +114,7 @@ func createNewWallet() {
 	fmt.Println("Creating new wallet...")
 	getPasswordWithConfirmation("Wallet Password", true, &pw)
 
-	g_wallet = stellarwallet.NewWallet(0, &pw)
+	g_wallet = stellarwallet.NewWallet(stellarwallet.WalletFlagSignAll, &pw)
 
 	words := g_wallet.Bip39Mnemonic(&pw)
 
@@ -226,7 +226,7 @@ func recoverWallet() {
 
 		getPasswordWithConfirmation("Mnemonic Password", false, &wpw)
 
-		g_wallet = stellarwallet.NewWalletFromMnemonic(0, &pw, words, &wpw)
+		g_wallet = stellarwallet.NewWalletFromMnemonic(stellarwallet.WalletFlagSignAll, &pw, words, &wpw)
 
 		if g_wallet == nil {
 			fmt.Println("Invalid mnemonic words.")
@@ -411,9 +411,12 @@ func lockWallet() {
 }
 
 func enterAccountDescription(a *stellarwallet.Account) {
+	unlockWallet(false)
+	defer unlockWalletPassword()
+
 	for {
 		desc := readLine("Account description")
-		err := a.SetDescription(desc, nil)
+		err := a.SetDescription(desc, &g_walletPassword)
 		if err != nil {
 			fmt.Printf("Invalid description: %s\n", err.Error())
 		} else {
@@ -424,9 +427,12 @@ func enterAccountDescription(a *stellarwallet.Account) {
 }
 
 func enterAssetDescription(a *stellarwallet.Asset) {
+	unlockWallet(false)
+	defer unlockWalletPassword()
+
 	for {
 		desc := readLine("Asset description")
-		err := a.SetDescription(desc, nil)
+		err := a.SetDescription(desc, &g_walletPassword)
 		if err != nil {
 			fmt.Printf("Invalid description: %s\n", err.Error())
 		} else {
@@ -436,9 +442,12 @@ func enterAssetDescription(a *stellarwallet.Asset) {
 }
 
 func enterAccountMemoText(a *stellarwallet.Account) {
+	unlockWallet(false)
+	defer unlockWalletPassword()
+
 	for {
 		memo := readLine("Memo Text")
-		err := a.SetMemoText(memo, nil)
+		err := a.SetMemoText(memo, &g_walletPassword)
 		if err != nil {
 			fmt.Printf("Invalid memo text: %s\n", err.Error())
 		} else {
@@ -448,8 +457,11 @@ func enterAccountMemoText(a *stellarwallet.Account) {
 }
 
 func enterAccountMemoID(a *stellarwallet.Account) {
+	unlockWallet(false)
+	defer unlockWalletPassword()
+
 	memo := getMemoID("Memo ID")
-	a.SetMemoId(memo, nil)
+	a.SetMemoId(memo, &g_walletPassword)
 }
 
 
@@ -506,9 +518,12 @@ func addRandomAccount() {
 }
 		
 func addWatchingAccount() {
+	unlockWallet(false)
+	defer unlockWalletPassword()
+
 	acc := getAddress("Account")
 
-	a := g_wallet.AddWatchingAccount(acc, nil)
+	a := g_wallet.AddWatchingAccount(acc, &g_walletPassword)
 
 	if a != nil {
 		fmt.Printf("New watching account: %s\n", a.PublicKey())
@@ -520,9 +535,12 @@ func addWatchingAccount() {
 }
 
 func addAddressBookAccount() {
+	unlockWallet(false)
+	defer unlockWalletPassword()
+
 	acc := getAddress("Account")
 
-	a := g_wallet.AddAddressBookAccount(acc, nil)
+	a := g_wallet.AddAddressBookAccount(acc, &g_walletPassword)
 
 	if a != nil {
 		fmt.Printf("New address book account: %s\n", a.PublicKey())
@@ -692,7 +710,10 @@ func addAsset() {
 		return
 	}
 
-	a := g_wallet.AddAsset(issuer, id, nil)
+	unlockWallet(false)
+	defer unlockWalletPassword()
+
+	a := g_wallet.AddAsset(issuer, id, &g_walletPassword)
 
 	if a == nil {
 		panic("add asset failed")
@@ -709,7 +730,7 @@ func deleteAsset() {
 	if a != nil {
 		fmt.Printf("Deleting Asset %s/%s %s...\n", a.AssetId(), a.Issuer(), a.Description())
 		if getOk("Delete Asset") {
-		
+
 			if !g_wallet.DeleteAsset(a) {
 				fmt.Println("Delete asset failed.")
 			} else {
@@ -753,9 +774,12 @@ func listTradingPairs() {
 }
 
 func enterTradingPairDescription(tp *stellarwallet.TradingPair) {
+	unlockWallet(false)
+	defer unlockWalletPassword()
+
 	for {
 		desc := readLine("Trading Pair description")
-		err := tp.SetDescription(desc, nil)
+		err := tp.SetDescription(desc, &g_walletPassword)
 		if err != nil {
 			fmt.Printf("Invalid description: %s\n", err.Error())
 		} else {
@@ -777,7 +801,10 @@ func addTradingPair() {
 		return
 	}
 
-	tp = g_wallet.AddTradingPair(asset1, asset2, nil)
+	unlockWallet(false)
+	defer unlockWalletPassword()
+
+	tp = g_wallet.AddTradingPair(asset1, asset2, &g_walletPassword)
 
 	if tp == nil {
 		fmt.Println("Invalid asset pair.")
