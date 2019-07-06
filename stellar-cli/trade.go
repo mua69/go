@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"github.com/stellar/go/build"
 	"github.com/stellar/go/keypair"
+	"time"
 )
 
 type Asset struct {
@@ -81,6 +82,14 @@ func (a1 *Asset)isEqual(a2 *Asset) bool {
 	return false
 }
 
+func (a* Asset)Issuer() string {
+	return a.issuer
+}
+
+func (a* Asset)Code() string {
+	return a.code
+}
+
 func (a* Asset)String() string {
 	if a.isNative() {
 		return "XLM"
@@ -133,8 +142,8 @@ func (a *Asset)toBuildAsset() build.Asset {
 	}
 }
 
-func printOrderBook(asset1, asset2 *Asset, maxLines int) {
-	ob, err := g_horizon.LoadOrderBook(asset1.toHorizonAsset(), asset2.toHorizonAsset())
+func printOrderBook(asset1, asset2 *Asset, maxLines int, timeout time.Duration) {
+	ob, err := getOrderBook(asset1, asset2, timeout)
 
 	if err != nil {
 		printHorizonError("Load Order Book", err)
@@ -194,6 +203,89 @@ func printOrderBook(asset1, asset2 *Asset, maxLines int) {
 	printTable(table, 6, " ")
 }
 
+// calculate average price to sell/buy 'amount' of asset1 for asset2 based on current order book
+// price in asset/asset1
+func getAverageAssetPrice(asset1, asset2 *Asset, amnt *big.Rat, timeout time.Duration) (buyPrice, sellPrice *big.Rat) {
+	ob, err := getOrderBook(asset1, asset2, timeout)
+
+	if err != nil {
+		printHorizonError("Load Order Book", err)
+		return
+	}
+
+	//fmt.Printf("%s->%s\n", asset1.StringPretty(), asset2.StringPretty())
+
+	zero := big.NewRat(0, 1)
+	buyAmount := big.NewRat(0, 1)
+	sellAmount := big.NewRat(0, 1)
+	amountCount := &big.Rat{}
+	amountCount.Set(amnt)
+
+	for i := range(ob.Bids) {
+		p := big.NewRat(int64(ob.Bids[i].PriceR.N), int64(ob.Bids[i].PriceR.D))
+		a2 := big.NewRat(int64(amount.MustParse(ob.Bids[i].Amount)), 1) // amount of asset2
+		a1 := &big.Rat{}
+		a1.Quo(a2, p) // amount of asset1
+
+		//fmt.Printf("Bid: a1: %s, a2: %s: p: %s\n", amountToString(a1), amountToString(a2), p.FloatString(3))
+		if amountCount.Cmp(a1) >= 0 {
+			//fmt.Printf("Bid 1\n")
+			sellAmount.Add(sellAmount, a2)
+			amountCount.Sub(amountCount, a1)
+		} else {
+			a2.Mul(amountCount, p)
+			sellAmount.Add(sellAmount, a2)
+			//fmt.Printf("Bid 2: a1: %s, a2: %s\n", amountToString(amountCount), amountToString(a2))
+			amountCount.Set(zero)
+		}
+	}
+	amountCount.Sub(amnt, amountCount) // sold amount
+	sellPrice = &big.Rat{}
+	if amountCount.Cmp(zero) > 0 {
+		sellPrice.Quo(sellAmount, amountCount)
+	} else {
+		sellPrice.Set(zero)
+	}
+
+	//fmt.Printf("Avg sell price for %s %s: %s %s\n", amountToString(amountCount), asset1.StringPretty(),
+	//	sellPrice.FloatString(6), asset2.StringPretty())
+
+	amountCount.Set(amnt)
+	for i := range(ob.Asks) {
+		p := big.NewRat(int64(ob.Asks[i].PriceR.N), int64(ob.Asks[i].PriceR.D))
+		a1 := big.NewRat(int64(amount.MustParse(ob.Asks[i].Amount)), 1) // amount of asset1
+		a2 := &big.Rat{}
+		a2.Mul(a1, p) // amount of asset2
+
+		//fmt.Printf("Ask: a1: %s, a2: %s: p: %s\n", amountToString(a1), amountToString(a2), p.FloatString(3))
+
+		if amountCount.Cmp(a1) >= 0 {
+			//fmt.Printf("Ask 1\n")
+			buyAmount.Add(buyAmount, a2)
+			amountCount.Sub(amountCount, a1)
+		} else {
+			a2.Mul(amountCount, p)
+			buyAmount.Add(buyAmount, a2)
+			//fmt.Printf("Ask 2: a1: %s, a2: %s\n", amountToString(amountCount), amountToString(a2))
+			amountCount.Set(zero)
+		}
+	}
+
+	amountCount.Sub(amnt, amountCount)
+	buyPrice = &big.Rat{}
+	if amountCount.Cmp(zero) > 0 {
+		buyPrice.Quo(buyAmount, amountCount)
+	} else {
+		buyPrice.Set(zero)
+	}
+
+	//fmt.Printf("Avg buy price for %s %s: %s %s\n", amountToString(amountCount), asset1.StringPretty(),
+	//	buyPrice.FloatString(6), asset2.StringPretty())
+
+	return
+}
+
+
 type Offer struct {
 	orderid uint64
 	buying bool
@@ -239,7 +331,7 @@ func getOffers(account string, asset1, asset2 *Asset) []*Offer {
 	offers, err := g_horizon.LoadAccountOffers(account)
 
 	if err != nil {
-		printHorizonError("Load Order Book", err)
+		printHorizonError("Load Account Offers", err)
 		return nil
 	}
 
@@ -337,6 +429,8 @@ func trade() {
 
 	asset1, asset2 := enterTradingPair("Trading Pair")
 
+	intendedAmount := getAmount("Intended trade amount")
+
 	code1 := asset1.codeToString()
 	code2 := asset2.codeToString()
 
@@ -356,7 +450,16 @@ func trade() {
 
 		fmt.Println()
 		fmt.Println("Order Book:")
-		printOrderBook(asset1, asset2, 3)
+		printOrderBook(asset1, asset2, 3, CacheTimeoutForce)
+
+		if intendedAmount.Cmp(gRatZero) > 0 {
+			buyPrice, sellPrice := getAverageAssetPrice(asset1, asset2, intendedAmount, CacheTimeoutShort)
+			if buyPrice != nil && sellPrice != nil {
+				fmt.Printf("\nAverage buy/sell price for %s %s: %s/%s\n", amountToStringPretty(intendedAmount),
+					code1, buyPrice.FloatString(7), sellPrice.FloatString(7))
+			}
+		}
+
 		fmt.Println("\nOffers:")
 		offers := getOffers(srcPub, asset1, asset2)
 		if len(offers) > 0 {
@@ -397,14 +500,14 @@ func trade() {
 			fmt.Printf("Selling %s %s for %s %s, rate %s\n", amountToString(amount1), code1,
 				amountToString(amount2), code2, rate.FloatString(7))
 
-			tx_addOrder(tx, asset1, asset2, rate, amount1, orderid)
+			tx_addSellOrder(tx, asset1, asset2, rate, amount1, orderid)
 		} else {
 			fmt.Printf("Buying %s %s with %s %s, rate %s\n", amountToString(amount1), code1,
 				amountToString(amount2), code2, rate.FloatString(7))
 			fmt.Printf("Selling %s %s for %s %s, rate %s\n", amountToString(amount2), code2,
 				amountToString(amount3), code1, rateInv.FloatString(7))
 
-			tx_addOrder(tx, asset2, asset1, rateInv, amount2, orderid)
+			tx_addSellOrder(tx, asset2, asset1, rateInv, amount2, orderid)
 		}
 
 		transactionFinalize(acc, src, tx)

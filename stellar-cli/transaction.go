@@ -1,23 +1,23 @@
 package main
 
 import (
-	"errors"
-	"os"
-	"fmt"
-	"io"
-	"bufio"
-	"strings"
-	"strconv"
-	"encoding/hex"
-	"encoding/json"
-	"math"
-	"math/big"
-	"github.com/stellar/go/build"
-	"github.com/stellar/go/xdr"
 	"github.com/stellar/go/clients/horizon"
-	"github.com/stellar/go/strkey"
-	"github.com/stellar/go/amount"
 	"github.com/stellar/go/keypair"
+	"strings"
+	"fmt"
+	"encoding/json"
+	"github.com/stellar/go/build"
+	"strconv"
+	"math/big"
+	"github.com/stellar/go/amount"
+	"github.com/stellar/go/xdr"
+	"github.com/stellar/go/strkey"
+	"math"
+	"encoding/hex"
+	"io"
+	"os"
+	"bufio"
+	"github.com/pkg/errors"
 )
 
 
@@ -39,15 +39,6 @@ func loadAccount(adr string) (*horizon.Account, error) {
 
 	return &acc, nil
 }
-
-/*
-type TxObject struct {
-	Embedded struct {
-		Records []horizon.Transaction
-	} `json:"_embedded"`
-}
-*/
-
 func getAccountTransactions(adr string, cnt int, pagingTokenIn string) (txs []horizon.Transaction, pagingTokenOut string, err error) {
 	if cnt <= 0 {
 		return
@@ -118,7 +109,7 @@ func getAccountTransactions(adr string, cnt int, pagingTokenIn string) (txs []ho
 	
 	if n >= cnt {
 		// there are probably more transaction records, return paging token of last transaction
-		pagingTokenOut = obj.Embedded.Records[n-1].PagingToken
+		pagingTokenOut = obj.Embedded.Records[n-1].PT
 	}
 
 	txs = obj.Embedded.Records
@@ -193,6 +184,12 @@ func tx_payment( tx *build.TransactionBuilder, dst string, amount string) {
 		build.NativeAmount{amount}))
 }
 
+func tx_payment_asset( tx *build.TransactionBuilder, dst string, asset *Asset, amount *big.Rat) {
+	tx.Mutate(build.Payment(
+		build.Destination{dst},
+		build.CreditAmount{asset.Code(), asset.Issuer(), amountToString(amount)}))
+}
+
 func tx_inflationDestination( tx *build.TransactionBuilder, dst string) {
 	tx.Mutate(build.SetOptions(build.InflationDest(dst)))
 }
@@ -201,6 +198,7 @@ func tx_addTrustLine( tx *build.TransactionBuilder, asset horizon.Asset) {
 	tx.Mutate(build.Trust(asset.Code, asset.Issuer))
 }
 
+
 func amountToString(a *big.Rat) string {
 	r := big.Rat{}
 	r.Quo(a, big.NewRat(amount.One, 1))
@@ -208,9 +206,28 @@ func amountToString(a *big.Rat) string {
 	return r.FloatString(7)
 }
 
-func tx_addOrder(tx *build.TransactionBuilder, selling, buying *Asset, price, amount *big.Rat, orderid uint64) {
+func amountToStringPretty(a *big.Rat) string {
+	r := big.Rat{}
+	r.Quo(a, big.NewRat(amount.One, 1))
+
+	return r.FloatString(2)
+}
+
+
+func tx_addSellOrder(tx *build.TransactionBuilder, selling, buying *Asset, price, amount *big.Rat, orderid uint64) {
 	rate := build.Rate{selling.toBuildAsset(), buying.toBuildAsset(),
 	build.Price(price.FloatString(10))}
+
+	if orderid == 0 {
+		tx.Mutate(build.CreateOffer(rate, build.Amount(amountToString(amount))))
+	} else {
+		tx.Mutate(build.UpdateOffer(rate, build.Amount(amountToString(amount)), build.OfferID(orderid)))
+	}
+}
+
+func tx_addBuyOrder(tx *build.TransactionBuilder, buying, selling *Asset, price, amount *big.Rat, orderid uint64) {
+	rate := build.Rate{selling.toBuildAsset(), buying.toBuildAsset(),
+		build.Price(price.FloatString(10))}
 
 	if orderid == 0 {
 		tx.Mutate(build.CreateOffer(rate, build.Amount(amountToString(amount))))
@@ -313,9 +330,15 @@ func changeTrustOpToString(op *xdr.ChangeTrustOp) string {
 	return s
 }
 
-func manageOfferOpToString(op *xdr.ManageOfferOp) string {
+func manageSellOfferOpToString(op *xdr.ManageSellOfferOp) string {
 	return "SELL:" + xdrAssetToString(op.Selling) + " BUY:" + xdrAssetToString(op.Buying) +
 		" AMOUNT:" + amount.StringFromInt64(int64(op.Amount)) +
+		" PRICE:" + op.Price.String() + " ID:" + fmt.Sprintf("%d", op.OfferId)
+}
+
+func manageBuyOfferOpToString(op *xdr.ManageBuyOfferOp) string {
+	return "BUY:" + xdrAssetToString(op.Buying) + " SELL:" + xdrAssetToString(op.Selling) +
+		" AMOUNT:" + amount.StringFromInt64(int64(op.BuyAmount)) +
 		" PRICE:" + op.Price.String() + " ID:" + fmt.Sprintf("%d", op.OfferId)
 }
 
@@ -440,11 +463,15 @@ func opToString( op xdr.Operation ) ( opType, opContent string) {
 	case xdr.OperationTypePathPayment:
 		opType = "Path Payment"
 
-	case xdr.OperationTypeManageOffer:
-		opType = "Manage Offer"
-		opContent += manageOfferOpToString(op.Body.ManageOfferOp)
+	case xdr.OperationTypeManageSellOffer:
+		opType = "Manage Sell Offer"
+		opContent += manageSellOfferOpToString(op.Body.ManageSellOfferOp)
 
-	case xdr.OperationTypeCreatePassiveOffer:
+	case xdr.OperationTypeManageBuyOffer:
+		opType = "Manage Buy Offer"
+		opContent += manageBuyOfferOpToString(op.Body.ManageBuyOfferOp)
+
+	case xdr.OperationTypeCreatePassiveSellOffer:
 		opType = "Create Passive Offer"
 
 	case xdr.OperationTypeSetOptions:

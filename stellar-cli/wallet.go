@@ -65,6 +65,19 @@ func openOrCreateWallet() {
 		if loadWallet() {
 			fmt.Printf("Loaded Wallet: %s\n", g_walletPath)
 
+			fmt.Println("Enter wallet password to perform integrity check or hit ENTER to skip.")
+			if unlockWallet(true) {
+				if !g_wallet.CheckIntegrity(&g_walletPassword) {
+					fmt.Printf("ATTENTION: Wallet integrity check failed!\n")
+				} else {
+					fmt.Printf("Wallet integrity check passed.\n")
+				}
+				unlockWalletPassword()
+			} else {
+				fmt.Println("Wallet integrity check skipped.")
+			}
+
+
 		} else {
 			fmt.Printf("Failed to load wallet.\n")
 		}
@@ -101,7 +114,7 @@ func createNewWallet() {
 	fmt.Println("Creating new wallet...")
 	getPasswordWithConfirmation("Wallet Password", true, &pw)
 
-	g_wallet = stellarwallet.NewWallet(&pw)
+	g_wallet = stellarwallet.NewWallet(stellarwallet.WalletFlagSignAll, &pw)
 
 	words := g_wallet.Bip39Mnemonic(&pw)
 
@@ -170,7 +183,7 @@ func getWordList() []string {
 
 		words:= splitString(s)
 
-		for i, _ := range words {
+		for i := range words {
 			if w < 24 {
 				if !stellarwallet.CheckMnemonicWord(words[i]) {
 					fmt.Printf("Invalid mnemonic word: \"%s\"\n", words[i])
@@ -213,7 +226,7 @@ func recoverWallet() {
 
 		getPasswordWithConfirmation("Mnemonic Password", false, &wpw)
 
-		g_wallet = stellarwallet.NewWalletFromMnemonic(&pw, words, &wpw)
+		g_wallet = stellarwallet.NewWalletFromMnemonic(stellarwallet.WalletFlagSignAll, &pw, words, &wpw)
 
 		if g_wallet == nil {
 			fmt.Println("Invalid mnemonic words.")
@@ -326,7 +339,8 @@ func listWallet() {
 				printHorizonError("load account", err)
 			} else {
 				if ai != nil {
-					fmt.Printf("   XLM: %s\n", ai.GetNativeBalance())
+					nb, _ := ai.GetNativeBalance()
+					fmt.Printf("   XLM: %s\n", nb)
 
 				} else {
 					fmt.Printf("   Not funded\n")
@@ -365,15 +379,19 @@ func unlockWalletPassword() {
 // prompts for wallet password if required
 // locks wallet password to avoid reset by time out
 //  unlockWalletPassword() must called after wallet password related processing is done
-func unlockWallet() {
+func unlockWallet(optional bool) bool {
 	lockWalletPassword()
 
 	if g_walletPassword != "" {
-		return
+		return true
 	}
 
 	for {
-		getPassword("Wallet Password", false, &g_walletPassword)
+		getPassword("Wallet Password", !optional, &g_walletPassword)
+		if g_walletPassword == "" {
+			unlockWalletPassword()
+			return false
+		}
 		if g_wallet.CheckPassword(&g_walletPassword) {
 			break
 		} else {
@@ -382,6 +400,8 @@ func unlockWallet() {
 	}
 
 	g_walletPasswordUnlockTime = time.Now()
+
+	return true
 }
 
 func lockWallet() {
@@ -391,9 +411,12 @@ func lockWallet() {
 }
 
 func enterAccountDescription(a *stellarwallet.Account) {
+	unlockWallet(false)
+	defer unlockWalletPassword()
+
 	for {
 		desc := readLine("Account description")
-		err := a.SetDescription(desc)
+		err := a.SetDescription(desc, &g_walletPassword)
 		if err != nil {
 			fmt.Printf("Invalid description: %s\n", err.Error())
 		} else {
@@ -404,9 +427,12 @@ func enterAccountDescription(a *stellarwallet.Account) {
 }
 
 func enterAssetDescription(a *stellarwallet.Asset) {
+	unlockWallet(false)
+	defer unlockWalletPassword()
+
 	for {
 		desc := readLine("Asset description")
-		err := a.SetDescription(desc)
+		err := a.SetDescription(desc, &g_walletPassword)
 		if err != nil {
 			fmt.Printf("Invalid description: %s\n", err.Error())
 		} else {
@@ -416,9 +442,12 @@ func enterAssetDescription(a *stellarwallet.Asset) {
 }
 
 func enterAccountMemoText(a *stellarwallet.Account) {
+	unlockWallet(false)
+	defer unlockWalletPassword()
+
 	for {
 		memo := readLine("Memo Text")
-		err := a.SetMemoText(memo)
+		err := a.SetMemoText(memo, &g_walletPassword)
 		if err != nil {
 			fmt.Printf("Invalid memo text: %s\n", err.Error())
 		} else {
@@ -428,15 +457,18 @@ func enterAccountMemoText(a *stellarwallet.Account) {
 }
 
 func enterAccountMemoID(a *stellarwallet.Account) {
+	unlockWallet(false)
+	defer unlockWalletPassword()
+
 	memo := getMemoID("Memo ID")
-	a.SetMemoId(memo)
+	a.SetMemoId(memo, &g_walletPassword)
 }
 
 
 func changePassword() {
 	fmt.Println("Changing Wallet Password...")
 
-	unlockWallet()
+	unlockWallet(false)
 	defer unlockWalletPassword()
 
 	var pw string
@@ -454,7 +486,7 @@ func changePassword() {
 
 
 func generateAccount() {
-	unlockWallet()
+	unlockWallet(false)
 	defer unlockWalletPassword()
 
 	a := g_wallet.GenerateAccount(&g_walletPassword)
@@ -469,7 +501,7 @@ func generateAccount() {
 }
 
 func addRandomAccount() {
-	unlockWallet()
+	unlockWallet(false)
 	defer unlockWalletPassword()
 
 	seed := getSeed("Account", false)
@@ -486,9 +518,12 @@ func addRandomAccount() {
 }
 		
 func addWatchingAccount() {
+	unlockWallet(false)
+	defer unlockWalletPassword()
+
 	acc := getAddress("Account")
 
-	a := g_wallet.AddWatchingAccount(acc)
+	a := g_wallet.AddWatchingAccount(acc, &g_walletPassword)
 
 	if a != nil {
 		fmt.Printf("New watching account: %s\n", a.PublicKey())
@@ -500,9 +535,12 @@ func addWatchingAccount() {
 }
 
 func addAddressBookAccount() {
+	unlockWallet(false)
+	defer unlockWalletPassword()
+
 	acc := getAddress("Account")
 
-	a := g_wallet.AddAddressBookAccount(acc)
+	a := g_wallet.AddAddressBookAccount(acc, &g_walletPassword)
 
 	if a != nil {
 		fmt.Printf("New address book account: %s\n", a.PublicKey())
@@ -599,7 +637,7 @@ func changeAccountMemo() {
 		menu := []MenuEntryCB{
 			{ func () { enterAccountMemoText(a) }, "Set Memo Text", true},
 			{ func () { enterAccountMemoID(a) }, "Set Memo ID", true},
-			{ func () { a.ClearMemoId() }, "Clear Memo ID", true}}
+			{ func () { a.ClearMemoId(nil) }, "Clear Memo ID", true}}
 		
 		runCallbackMenu(menu, "EDIT MEMO: Select Action", false)
 		saveWallet()
@@ -653,7 +691,7 @@ func selectAsset(prompt string, enterAssetOption, nativeOption bool) (selectedAs
 	fmt.Printf("\n%s:\n", prompt)
 	sel := runMenu(menu, false)
 
-	for i,_ := range choices {
+	for i := range choices {
 		if choices[i].id == sel {
 			return choices[i].asset, choices[i].native 
 		}
@@ -672,7 +710,10 @@ func addAsset() {
 		return
 	}
 
-	a := g_wallet.AddAsset(issuer, id)
+	unlockWallet(false)
+	defer unlockWalletPassword()
+
+	a := g_wallet.AddAsset(issuer, id, &g_walletPassword)
 
 	if a == nil {
 		panic("add asset failed")
@@ -689,7 +730,7 @@ func deleteAsset() {
 	if a != nil {
 		fmt.Printf("Deleting Asset %s/%s %s...\n", a.AssetId(), a.Issuer(), a.Description())
 		if getOk("Delete Asset") {
-		
+
 			if !g_wallet.DeleteAsset(a) {
 				fmt.Println("Delete asset failed.")
 			} else {
@@ -706,6 +747,7 @@ func changeAssetDescription() {
 
 	if a != nil {
 		enterAssetDescription(a)
+		saveWallet()
 	}
 }
 
@@ -725,16 +767,19 @@ func listTradingPairs() {
 	fmt.Println("\nTrading Pairs:")
 	tps := g_wallet.TradingPairs()
 
-	for _, tp := range(tps) {
+	for _, tp := range tps {
 		fmt.Printf("%s<->%s %s\n", assetToStringPretty(tp.Asset1()), assetToStringPretty(tp.Asset2()), 
 			tp.Description())
 	}
 }
 
 func enterTradingPairDescription(tp *stellarwallet.TradingPair) {
+	unlockWallet(false)
+	defer unlockWalletPassword()
+
 	for {
 		desc := readLine("Trading Pair description")
-		err := tp.SetDescription(desc)
+		err := tp.SetDescription(desc, &g_walletPassword)
 		if err != nil {
 			fmt.Printf("Invalid description: %s\n", err.Error())
 		} else {
@@ -756,7 +801,10 @@ func addTradingPair() {
 		return
 	}
 
-	tp = g_wallet.AddTradingPair(asset1, asset2)
+	unlockWallet(false)
+	defer unlockWalletPassword()
+
+	tp = g_wallet.AddTradingPair(asset1, asset2, &g_walletPassword)
 
 	if tp == nil {
 		fmt.Println("Invalid asset pair.")
@@ -825,7 +873,7 @@ func selectTradingPair(prompt string, enterOption bool) *stellarwallet.TradingPa
 	fmt.Printf("\n%s:\n", prompt)
 	sel := runMenu(menu, false)
 
-	for i,_ := range choices {
+	for i := range choices {
 		if choices[i].id == sel {
 			return choices[i].tp
 		}
