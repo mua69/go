@@ -1,25 +1,22 @@
 package main
 
 import (
-	"fmt"
-	"flag"
-	"strings"
-	"net/http"
-	"io/ioutil"
-	"os"
 	"encoding/hex"
+	"flag"
+	"fmt"
+	"github.com/stellar/go/clients/horizonclient"
+	"io/ioutil"
+	"net/http"
+	"os"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/mua69/stellarwallet"
 
 	"github.com/stellar/go/keypair"
-	"github.com/stellar/go/build"
-	"github.com/stellar/go/xdr"
-	"github.com/stellar/go/clients/stellartoml"
-	"github.com/stellar/go/clients/federation"
-	"github.com/stellar/go/clients/horizon"
 	"github.com/stellar/go/network"
+	"github.com/stellar/go/xdr"
 	"math/big"
 	"sort"
 )
@@ -32,10 +29,10 @@ const (
 )
 
 var (
-	g_network= build.TestNetwork
-	g_horizon = horizon.DefaultTestNetClient
+	g_network= network.TestNetworkPassphrase
+	g_horizon = horizonclient.DefaultTestNetClient
 	g_online = true
-	g_version = "1.0.0"
+	g_version = "1.1.0"
 	g_gitHash = "undefined"
 
 	g_signers []string
@@ -74,23 +71,25 @@ func clearSigners() {
 
 func setupNetwork() {
 	if g_testnet {
-		g_network = build.TestNetwork
-		g_horizon = horizon.DefaultTestNetClient
+		g_network = network.TestNetworkPassphrase
+		g_horizon = horizonclient.DefaultTestNetClient
 	} else {
-		g_network = build.PublicNetwork 	
-		g_horizon = &horizon.Client{
-			URL:  "https://horizon.crymel.icu/",
+		g_network = network.PublicNetworkPassphrase
+		g_horizon = &horizonclient.Client{
+			HorizonURL:  "https://horizon.crymel.icu/",
 			HTTP: http.DefaultClient,
 		}
 	}
-			
 
 	if g_horizonUrl != "" {
-		g_horizon.URL = g_horizonUrl
+		g_horizon.HorizonURL = g_horizonUrl
 	}
 
+	g_horizon.AppName = "stellar-cli"
+	g_horizon.AppVersion = g_version + g_gitHash
+
 	fmt.Println("Using Network       :", g_network)
-	fmt.Println("Using Horizon Server:", g_horizon.URL)
+	fmt.Println("Using Horizon Server:", g_horizon.HorizonURL)
 	fmt.Println()
 }
 
@@ -158,7 +157,7 @@ func getFund(adr string) {
 }
 
 func federationLookup(adr string) ( id, memoType, memo string)  {
-	client := &federation.Client{
+	/*client := &federation.Client{
 		HTTP:        http.DefaultClient,
 		Horizon:     g_horizon,
 		StellarTOML: stellartoml.DefaultClient,
@@ -171,7 +170,7 @@ func federationLookup(adr string) ( id, memoType, memo string)  {
 		memoType = r.MemoType
 		memo = r.Memo.String()
 	}
-
+*/
 	return
 }
 
@@ -271,99 +270,104 @@ func showBalances() {
 }
 
 func accountInfo(adr string) {
-	var table [][]string
+	table := newCliTable(3)
+	table.setSeparator(":")
 
+	acc := getAccountInfo(adr, CacheTimeoutForce)
 	
-	acc, err := loadAccount(adr)
-	
-	if err != nil {
-		panic(err)
-	}
 
-	if acc == nil {
+	if !acc.exists {
 		fmt.Println("Account does not exist:", adr)
 		return
 	}	
 
-	table = appendTableLine(table, "Address", adr)
+	table.appendLine("Address", adr)
+
 
 	maxBalanceStringLen := 0
-	for i, _ := range acc.Balances {
-		as := &acc.Balances[i]
-		if len(as.Balance) > maxBalanceStringLen {
-			maxBalanceStringLen = len(as.Balance)
+	for _, asb := range acc.balances {
+		if len(amountToString(asb)) > maxBalanceStringLen {
+			maxBalanceStringLen = len(amountToString(asb))
 		}
 	}
 
-	nb, _ := acc.GetNativeBalance()
+	nb := acc.balances[newNativeAsset()]
 
-	table = appendTableLine(table, "Balance (XLM)", fmt.Sprintf("%*s", maxBalanceStringLen, nb))
-	for i, _ := range acc.Balances {
-		as := &acc.Balances[i]
-		if as.Asset.Code != "" {
-			table = appendTableLine(table, fmt.Sprintf("Balance (%s)", as.Asset.Code),
-				fmt.Sprintf("%*s (%s/%s)", maxBalanceStringLen, as.Balance, as.Asset.Code, as.Asset.Issuer))
+	table.appendLine("Balance (XLM)", fmt.Sprintf("%*s", maxBalanceStringLen, amountToString(nb)))
+
+	for as, asb := range acc.balances {
+		if !as.isNative() {
+			table.appendLine(fmt.Sprintf("Balance (%s)", as.Code()),
+				fmt.Sprintf("%*s (%s/%s)", maxBalanceStringLen, amountToString(asb), as.Code(), as.Issuer()))
 		}
 	}
-	table = appendTableLine(table, "Inflation Destination", acc.InflationDestination)
-	if acc.HomeDomain != "" {
-		table = appendTableLine(table, "Home Domain", acc.HomeDomain)
+	table.appendLine("Inflation Destination", acc.horizonData.InflationDestination)
+	if acc.horizonData.HomeDomain != "" {
+		table.appendLine("Home Domain", acc.horizonData.HomeDomain)
 	}
 	
 	var flags []string
 
-	if acc.Flags.AuthRequired {
+	if acc.horizonData.Flags.AuthRequired {
 		flags = append(flags, "AUTH_REQUIRED")
 	}
-	if acc.Flags.AuthRevocable {
+	if acc.horizonData.Flags.AuthRevocable {
 		flags = append(flags, "AUTH_REVOCABLE")
 	}
 
 	if len(flags) > 0 {
-		table = appendTableLine(table, "Account Flags", strings.Join(flags, " "))
+		table.appendLine("Account Flags", strings.Join(flags, " "))
 	}
 
-	table = appendTableLine(table, "Thresholds Low/Med/High",
-		fmt.Sprintf("%d/%d/%d", acc.Thresholds.LowThreshold, acc.Thresholds.MedThreshold,
-			acc.Thresholds.HighThreshold))
+	table.appendLine("Thresholds Low/Med/High",
+		fmt.Sprintf("%d/%d/%d", acc.horizonData.Thresholds.LowThreshold, acc.horizonData.Thresholds.MedThreshold,
+			acc.horizonData.Thresholds.HighThreshold))
 	
-	for _, signer := range acc.Signers {
+	for _, signer := range acc.signers {
 		//table = appendTableLine(table, "Signer", fmt.Sprintf("%s Weight:%d Key:%s Type:%s", signer.PublicKey,
 		//	signer.Weight, signer.Key, signer.Type))
-		table = appendTableLine(table, "Signer", fmt.Sprintf("%s Weight:%d", signer.Key,
-			signer.Weight))
+		table.appendLine("Signer", fmt.Sprintf("%s Weight:%d Type:%s", signer.id,
+			signer.weight, signer.stype))
 	}
-	
-	printTable(table, 2, ": ")
+
+	table.print()
+
 }
 
 
-func transactionFinalize(acc *stellarwallet.Account, src string, tx *build.TransactionBuilder) {
-	tx_finalize(tx)
-
-	signed, txe := enterSigners(acc, src, tx)
+func transactionFinalize(acc *stellarwallet.Account, src string, tx *Transaction) {
+	if !enterSigners(acc, src, tx) {
+		// error message is printed already
+		return
+	}
 
 	fmt.Println("\nTransaction summary:")
-	
-	print_transaction(txe.E, "", os.Stdout)
 
+	txe_xdr := tx.getXdrEnvelope()
+
+	if txe_xdr == nil {
+		return
+	}
+
+	fmt.Println("\nTransaction details:")
+	print_transaction( txe_xdr, "", os.Stdout )
 	fmt.Println("\n")
 
-	if signed {
+	if tx.isSigned() {
 		if getOk("Transmit transaction") {
-			tx_transmit(txe)
+			tx.transmit()
 		} else {
 			fmt.Println("Transaction aborted.")
 		}
 	} else {
 		fmt.Println("No signing key provided. Printing unsigned transaction for later signing:")
-		outputTransactionBlob(&txe)
+		outputTransactionBlob(tx)
 	}
 }
 
 
 
-func enterSourceAccount() (acc *stellarwallet.Account, src string, tx *build.TransactionBuilder) {
+func enterSourceAccount() (acc *stellarwallet.Account, src string, tx *Transaction) {
 	for {
 		acc = selectSeedAccount("Select Source Account:", true)
 
@@ -373,7 +377,7 @@ func enterSourceAccount() (acc *stellarwallet.Account, src string, tx *build.Tra
 			src = getAddressOrSeed("Source")
 		}
 
-		tx = tx_setup(src)
+		tx = newTransaction(src)
 
 		if tx != nil {
 			break
@@ -395,7 +399,7 @@ func enterDestinationAccount(prompt string) string {
 	}
 }
 
-func enterSigners(acc *stellarwallet.Account, key string, tx *build.TransactionBuilder) (bool, build.TransactionEnvelopeBuilder) {
+func enterSigners(acc *stellarwallet.Account, key string, tx *Transaction) bool {
 
 	if acc != nil {
 		unlockWallet(false)
@@ -419,43 +423,43 @@ func enterSigners(acc *stellarwallet.Account, key string, tx *build.TransactionB
 
 	defer clearSigners()
 
-	return tx_sign(tx)
+	return tx.sign()
 }
 
 
-func enterNativePayment(tx *build.TransactionBuilder) {
+func enterNativePayment(tx *Transaction) {
 
 	dst :=      enterDestinationAccount("Destination")
 	amount :=   getPayment("Amount")
 
-	tx_payment(tx, dst, amount)
+	tx.nativePayment(dst, amount)
 }	
 
-func enterPaymentAsset(tx *build.TransactionBuilder) {
+func enterPaymentAsset(tx *Transaction) {
 	asset := enterAsset("")
 	dst := enterDestinationAccount("Destination")
 	amount := getAmount(asset.codeToString())
 
-	tx_payment_asset(tx, dst, asset, amount)
+	tx.assetPayment(dst, asset, amount)
 }
 
-func enterCreateAccount(tx *build.TransactionBuilder) {
+func enterCreateAccount(tx *Transaction) {
 
 	dst :=      enterDestinationAccount("Destination (new account)")
 	amount :=   getPayment("Amount")
 
-	tx_createAccount(tx, dst, amount)
+	tx.createAccount(dst, amount)
 }	
 
-func enterInflationDestination(tx *build.TransactionBuilder) {
+func enterInflationDestination(tx *Transaction) {
 
 	dst :=      enterDestinationAccount("Inflation Destination")
 
-	tx_inflationDestination(tx, dst)
+	tx.inflationDestination(dst)
 }	
 
 
-func enterMemo(tx *build.TransactionBuilder) {
+func enterMemo(tx *Transaction) {
 	fmt.Println("Select Memo Type:")
 	memoTypeMenu := []MenuEntry{
 		{ "none", "No Memo", true },
@@ -472,50 +476,47 @@ func enterMemo(tx *build.TransactionBuilder) {
 
 	case "text":
 		memoTxt := getMemoText("Memo Text")
-		tx_memoText(tx, memoTxt)
+		tx.memoText(memoTxt)
 
 
 	case "id":
 		memoId := getMemoID("Memo ID")
-		tx_memoID(tx, memoId)
+		tx.memoID(memoId)
 
 	case "hash":
 		memoHash := getMemoHash("Memo Hash")
-		tx_memoHash(tx, memoHash)
+		tx.memoHash(memoHash)
 
 	case "rethash":
 		memoHash := getMemoHash("Memo Return Hash")
-		tx_memoRetHash(tx, memoHash)
+		tx.memoRetHash(memoHash)
 
 	}
 }
 
-func outputTransactionBlob( txe *build.TransactionEnvelopeBuilder) {
-	txeB64, err := txe.Base64()
-	if err != nil {
-		panic(err)
-	}
+func outputTransactionBlob( tx *Transaction) {
+	txeB64 := tx.getBlob()
 
 	fmt.Println(txeB64)
 
-	hash, err := network.HashTransaction( &txe.E.Tx, g_network.Passphrase)
+	err, hash := tx.getHash()
 
 	if err != nil {
-		panic(err)
+		return
 	}
 
 	date := time.Now().Format(time.RFC3339)
 
 	var prefix string
-	if len(txe.E.Signatures) == 0 {
-		prefix = "tx"
-	} else {
+	if tx.isSigned() {
 		prefix = "txs"
+	} else {
+		prefix = "tx"
 	}
 
 	fileName := fmt.Sprintf("%s_%s_%s.txt", prefix, date, hex.EncodeToString(hash[:])[0:8])
 
-	err = writeTransactionBlob(txeB64, txe.E, fileName)
+	err = writeTransactionBlob(txeB64, tx, fileName)
 
 	if err != nil {
 		fmt.Printf("Failed to write transaction blob to file \"%s\": %s\n", fileName, err.Error())
@@ -525,6 +526,7 @@ func outputTransactionBlob( txe *build.TransactionEnvelopeBuilder) {
 
 }
 
+/*
 func sign_transaction() {
 	var tx_s string
 	var err error
@@ -565,6 +567,7 @@ func sign_transaction() {
 	outputTransactionBlob(&txe)
 	
 }
+*/
 
 func submit_transaction() {
 	var tx_s string
@@ -721,9 +724,9 @@ func showTransactions() {
 			fmt.Printf("\n%s %s:\n", tx.LedgerCloseTime.Format(time.RFC3339), tx.Hash )
 			txe := &xdr.TransactionEnvelope{ }
 			
-			txe.Scan(tx.EnvelopeXdr)
+			err := txe.Scan(tx.EnvelopeXdr)
 			
-			if txe.Tx.SourceAccount.Ed25519  != nil {
+			if err == nil && txe.Tx.SourceAccount.Ed25519  != nil {
 				pretty_print_transaction(txe, adr)
 			}
 		}
@@ -742,7 +745,7 @@ func addTrustLine() {
 
 	asset := enterAsset("")
 
-	tx_addTrustLine(tx, asset.toHorizonAsset())
+	tx.addTrustLine(asset)
 	
 	enterMemo(tx)
 
@@ -758,7 +761,7 @@ func createOrder() {
 	price := getPrice("Price")
 	amount := getAmount("Amount")
 
-	tx_addSellOrder(tx, selling, buying, price, amount, 0)
+	tx.addSellOrder(selling, buying, price, amount, 0)
 	
 	enterMemo(tx)
 
@@ -879,7 +882,7 @@ func mainMenu() {
 		{ transaction, "Primitive Transactions", true},
 		{ lookupFederation, "Federation Lookup", true},
 		{ generateVanityAddress,  "Generate New Address", true},
-		{ sign_transaction,   "Sign Transaction", true},
+		//{ sign_transaction,   "Sign Transaction", true},
 		{ submit_transaction, "Submit Signed Transaction", true},
 		{ fundAccount,  "Fund Account (test network only)", g_testnet} }
 	

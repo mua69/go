@@ -1,14 +1,15 @@
 package main
 
 import (
-	"github.com/stellar/go/clients/horizon"
-	"math/big"
-	"github.com/mua69/stellarwallet"
-	"time"
-	"fmt"
 	"encoding/json"
-	"github.com/stellar/go/price"
+	"fmt"
+	"github.com/mua69/stellarwallet"
 	"github.com/pkg/errors"
+	"github.com/stellar/go/clients/horizonclient"
+	"github.com/stellar/go/price"
+	hprotocol "github.com/stellar/go/protocols/horizon"
+	"math/big"
+	"time"
 )
 
 const CacheTimeoutForce = time.Duration(0) // force refresh
@@ -19,13 +20,15 @@ const CachTimeoutLong = time.Duration(600) // 10 minutes
 type AccountSigner struct {
 	id string
 	weight uint32
+	stype string
 }
 
 type AccountInfo struct {
 	id string
 	exists bool
 	timestamp time.Time
-	horizonData *horizon.Account
+	sequence string
+	horizonData *hprotocol.Account
 	account *stellarwallet.Account
 	balances map[*Asset]*big.Rat
 	signers []AccountSigner
@@ -49,10 +52,10 @@ func getAccountInfo(id string, timeout time.Duration) *AccountInfo {
 	d = new(AccountInfo)
 	d.id = id
 
-	acc, err := g_horizon.LoadAccount(id)
+	acc, err := g_horizon.AccountDetail(horizonclient.AccountRequest{ AccountID:id })
 
 	if err != nil {
-		if herr, ok := err.(*horizon.Error); ok {
+		if herr, ok := err.(*horizonclient.Error); ok {
 			if herr.Problem.Title == "Resource Missing" {
 				d.exists = false
 			} else {
@@ -76,6 +79,7 @@ func getAccountInfo(id string, timeout time.Duration) *AccountInfo {
 
 	if d.exists {
 		d.horizonData = &acc
+		d.sequence = acc.Sequence
 		d.balances = make(map[*Asset]*big.Rat)
 
 		for _, b := range acc.Balances {
@@ -89,7 +93,7 @@ func getAccountInfo(id string, timeout time.Duration) *AccountInfo {
 		}
 
 		for _, signer := range acc.Signers {
-			d.signers = append(d.signers, AccountSigner{signer.Key, uint32(signer.Weight)})
+			d.signers = append(d.signers, AccountSigner{signer.Key, uint32(signer.Weight), signer.Type})
 		}
 	}
 
@@ -97,6 +101,16 @@ func getAccountInfo(id string, timeout time.Duration) *AccountInfo {
 
 	g_accountInfoCache[id] = d
 	return d
+}
+
+func (a *AccountInfo) getNativeBalance() *big.Rat {
+	v := a.balances[newNativeAsset()]
+
+	if v != nil {
+		return v
+	}
+
+	return big.NewRat(0, 1)
 }
 
 func clearAccountInfoCache(id string) {
@@ -112,13 +126,13 @@ type AssetPair struct {
 }
 
 type OrderBookCache struct {
-	ob *horizon.OrderBookSummary
+	ob *hprotocol.OrderBookSummary
 	timestamp time.Time
 }
 
 var gOrderBookCache = make(map[AssetPair]*OrderBookCache)
 
-func getOrderBook(asset1, asset2 *Asset, timeout time.Duration) (*horizon.OrderBookSummary, error) {
+func getOrderBook(asset1, asset2 *Asset, timeout time.Duration) (*hprotocol.OrderBookSummary, error) {
 	p := AssetPair{asset1, asset2}
 
 	ent := gOrderBookCache[p]
@@ -131,7 +145,7 @@ func getOrderBook(asset1, asset2 *Asset, timeout time.Duration) (*horizon.OrderB
 
 	fmt.Printf("loading order book for asset pair: %s %s ...\n", asset1.StringPretty(), asset2.StringPretty())
 
-	ob, err := g_horizon.LoadOrderBook(asset1.toHorizonAsset(), asset2.toHorizonAsset())
+	ob, err := g_horizon.OrderBook(assetsToOrderBookReuqest(asset1, asset2))
 
 	if err != nil {
 		return nil, err
@@ -149,6 +163,83 @@ func getOrderBook(asset1, asset2 *Asset, timeout time.Duration) (*horizon.OrderB
 	return ent.ob, nil
 }
 
+func getAccountTransactions(adr string, cnt int, pagingTokenIn string) (txs []hprotocol.Transaction, pagingTokenOut string, err error) {
+	if cnt <= 0 {
+		return
+	}
+
+	acc := getAccountInfo(adr, CacheTimeoutMedium)
+
+	if !acc.exists {
+		return
+	}
+
+	if cnt > 200 {
+		cnt = 200 // maximum limit allowed by horizon server
+	}
+
+	txp, err := g_horizon.Transactions(horizonclient.TransactionRequest{ForAccount:adr,
+		Limit:uint(cnt), Cursor:pagingTokenIn, Order:horizonclient.OrderDesc})
+
+	if err != nil {
+		printHorizonError("get account transactions", err)
+		return
+	}
+
+	txs = txp.Embedded.Records
+
+	n := len(txs)
+
+	if n == 0 {
+		return
+	}
+
+	if n >= cnt {
+		// there are probably more transaction records, return paging token of last transaction
+		pagingTokenOut = txs[n-1].PT
+	}
+
+	return
+}
+
+func getAccountTrades(adr string, cnt int, pagingTokenIn string) (trades []hprotocol.Trade, pagingTokenOut string, err error) {
+	if cnt <= 0 {
+		return
+	}
+
+	acc := getAccountInfo(adr, CacheTimeoutMedium)
+
+	if !acc.exists {
+		return
+	}
+
+	if cnt > 200 {
+		cnt = 200 // maximum limit allowed by horizon server
+	}
+
+	tp, err := g_horizon.Trades(horizonclient.TradeRequest{ForAccount:adr,
+		Limit:uint(cnt), Cursor:pagingTokenIn, Order:horizonclient.OrderDesc})
+
+	if err != nil {
+		printHorizonError("get account transactions", err)
+		return
+	}
+
+	trades = tp.Embedded.Records
+
+	n := len(trades)
+
+	if n == 0 {
+		return
+	}
+
+	if n >= cnt {
+		// there are probably more transaction records, return paging token of last transaction
+		pagingTokenOut = trades[n-1].PT
+	}
+
+	return
+}
 
 type ReferenceCurrencyPrice struct {
 	name string // name of reference currency

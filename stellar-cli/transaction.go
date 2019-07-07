@@ -1,131 +1,31 @@
 package main
 
 import (
-	"github.com/stellar/go/clients/horizon"
-	"github.com/stellar/go/keypair"
-	"strings"
-	"fmt"
-	"encoding/json"
-	"github.com/stellar/go/build"
-	"strconv"
-	"math/big"
-	"github.com/stellar/go/amount"
-	"github.com/stellar/go/xdr"
-	"github.com/stellar/go/strkey"
-	"math"
-	"encoding/hex"
-	"io"
-	"os"
 	"bufio"
+	"fmt"
 	"github.com/pkg/errors"
+	"github.com/stellar/go/clients/horizonclient"
+	"github.com/stellar/go/keypair"
+	hprotocol "github.com/stellar/go/protocols/horizon"
+	"github.com/stellar/go/txnbuild"
+	"github.com/stellar/go/xdr"
+	"math/big"
+	"os"
+	"strings"
 )
 
 
-func loadAccount(adr string) (*horizon.Account, error) {
-
-	kp := keypair.MustParse(adr)
-
-	acc, err := g_horizon.LoadAccount(kp.Address())
-
-	if err != nil {
-		if herr, ok := err.(*horizon.Error); ok {
-			if herr.Problem.Title == "Resource Missing" {
-				return nil, nil
-			}
-		}
-
-		return nil, err
-	}
-
-	return &acc, nil
-}
-func getAccountTransactions(adr string, cnt int, pagingTokenIn string) (txs []horizon.Transaction, pagingTokenOut string, err error) {
-	if cnt <= 0 {
-		return
-	}
-
-	acc, err := loadAccount(adr)
-
-	if acc == nil {
-		return
-	}
-
-	var obj struct {
-		Embedded struct {
-			Records []horizon.Transaction
-		} `json:"_embedded"`
-	}
-
-
-	baseUrl := strings.TrimRight(g_horizon.URL, "/")
-	baseUrl += "/accounts/" + adr + "/transactions"
-
-	if cnt > 200 {
-		cnt = 200 // maximum limit allowed by horizon server
-	}
-
-	var url string
-
-	if pagingTokenIn != "" {
-		url = fmt.Sprintf("%s?order=desc&limit=%d&cursor=%s", baseUrl, cnt, pagingTokenIn)
-	} else {
-		url = fmt.Sprintf("%s?order=desc&limit=%d", baseUrl, cnt)
-	}
-
-
-	//fmt.Println(url)
-	
-	resp, err := g_horizon.HTTP.Get(url)
-	if err != nil {
-		return
-	}
-		
-	defer resp.Body.Close()
-	decoder := json.NewDecoder(resp.Body)
-		
-	if !(resp.StatusCode >= 200 && resp.StatusCode < 300) {
-		horizonError := &horizon.Error{
-			Response: resp,
-		}
-		decodeError := decoder.Decode(&horizonError.Problem)
-		if decodeError != nil {
-			err = errors.New("error decoding horizon.Problem")
-			return
-		}
-		err = horizonError
-		return
-	}
-
-	err = decoder.Decode(&obj)
-	if err != nil {
-		return
-	}
-
-	n := len(obj.Embedded.Records) 
-	
-	if n == 0 {
-		return
-	}
-	
-	if n >= cnt {
-		// there are probably more transaction records, return paging token of last transaction
-		pagingTokenOut = obj.Embedded.Records[n-1].PT
-	}
-
-	txs = obj.Embedded.Records
-
-	return
-}
-
 func printHorizonError(action string, err error) {
 	if err != nil {
-		fmt.Println("%s failed, error details:", action)
-		if herr, ok := err.(*horizon.Error); ok {
-			fmt.Println(herr.Problem.Title)
-			fmt.Println(herr.Problem.Detail)
-			fmt.Println(string(herr.Problem.Extras["result_codes"]))
-			fmt.Println(herr.Error())
-			
+		fmt.Printf("%s failed, error details:\n", action)
+		if herr, ok := err.(*horizonclient.Error); ok {
+			resCodes, err := herr.ResultCodes()
+			if err == nil {
+				fmt.Printf("%s: %s %s\n", herr.Problem.Title,
+					resCodes.TransactionCode, strings.Join(resCodes.OperationCodes, " "))
+			} else {
+				fmt.Printf("%s\n", herr.Problem.Title)
+			}
 		} else {
 			fmt.Println(err.Error())
 		}
@@ -133,496 +33,233 @@ func printHorizonError(action string, err error) {
 }
 
 
-func printTransactionResults( txr horizon.TransactionSuccess) {
+func printTransactionResults( txr hprotocol.TransactionSuccess) {
 	fmt.Println("Transaction posted in ledger: ", txr.Ledger)
 	fmt.Println("Transaction hash            : ", txr.Hash)
 }
 
+type Transaction struct {
+	tx *txnbuild.Transaction
+	signed bool
+}
 
-func tx_setup( src string ) (tx *build.TransactionBuilder) {
-	acc, err := loadAccount(src)
+func newTransaction(src string) *Transaction {
+	acc := getAccountInfo(src, CacheTimeoutForce)
 
-	if err != nil {
-		panic(err)
-	}
 
-	if acc == nil {
+	if !acc.exists {
 		// account does not exist
 		return nil
 	}
 
-	seq, err := strconv.ParseUint(acc.Sequence, 10, 64)
+	t := new(Transaction)
+	t.tx = new(txnbuild.Transaction)
+
+	t.tx.SourceAccount = acc.horizonData
+
+	t.tx.Network = g_network
+
+	t.signed = false
+
+	return t
+}
+
+func (t *Transaction)isSigned() bool {
+	return t.signed
+}
+
+func (t *Transaction) sign() bool {
+
+	t.tx.Timebounds = txnbuild.NewTimeout(60)
+
+	err := t.tx.Build()
 
 	if err != nil {
-		fmt.Println("Failed to parse account sequence number.")
-		panic(err)
+		fmt.Printf("Failed to build transaction: %v", err)
+		return false
 	}
 
-	tx, err = build.Transaction(
-		build.SourceAccount{src},
-		build.Sequence{seq+1},
-		g_network)
+	signers := make([]*keypair.Full, 0)
+
+	for _, s := range g_signers {
+		kp := keypair.MustParse(s)
+		kpf := kp.(*keypair.Full)
+
+		signers = append(signers, kpf)
+	}
+
+	err = t.tx.Sign(signers...)
 
 	if err != nil {
-		panic(err)
-	}
-
-	return
-}
-
-func tx_createAccount(tx *build.TransactionBuilder, dst string, amount string) {
-
-	tx.Mutate(
-		build.CreateAccount(
-			build.Destination{dst},
-			build.NativeAmount{amount}))
-}
-
-func tx_payment( tx *build.TransactionBuilder, dst string, amount string) {
-	tx.Mutate(build.Payment(
-		build.Destination{dst},
-		build.NativeAmount{amount}))
-}
-
-func tx_payment_asset( tx *build.TransactionBuilder, dst string, asset *Asset, amount *big.Rat) {
-	tx.Mutate(build.Payment(
-		build.Destination{dst},
-		build.CreditAmount{asset.Code(), asset.Issuer(), amountToString(amount)}))
-}
-
-func tx_inflationDestination( tx *build.TransactionBuilder, dst string) {
-	tx.Mutate(build.SetOptions(build.InflationDest(dst)))
-}
-
-func tx_addTrustLine( tx *build.TransactionBuilder, asset horizon.Asset) {
-	tx.Mutate(build.Trust(asset.Code, asset.Issuer))
-}
-
-
-func amountToString(a *big.Rat) string {
-	r := big.Rat{}
-	r.Quo(a, big.NewRat(amount.One, 1))
-
-	return r.FloatString(7)
-}
-
-func amountToStringPretty(a *big.Rat) string {
-	r := big.Rat{}
-	r.Quo(a, big.NewRat(amount.One, 1))
-
-	return r.FloatString(2)
-}
-
-
-func tx_addSellOrder(tx *build.TransactionBuilder, selling, buying *Asset, price, amount *big.Rat, orderid uint64) {
-	rate := build.Rate{selling.toBuildAsset(), buying.toBuildAsset(),
-	build.Price(price.FloatString(10))}
-
-	if orderid == 0 {
-		tx.Mutate(build.CreateOffer(rate, build.Amount(amountToString(amount))))
-	} else {
-		tx.Mutate(build.UpdateOffer(rate, build.Amount(amountToString(amount)), build.OfferID(orderid)))
-	}
-}
-
-func tx_addBuyOrder(tx *build.TransactionBuilder, buying, selling *Asset, price, amount *big.Rat, orderid uint64) {
-	rate := build.Rate{selling.toBuildAsset(), buying.toBuildAsset(),
-		build.Price(price.FloatString(10))}
-
-	if orderid == 0 {
-		tx.Mutate(build.CreateOffer(rate, build.Amount(amountToString(amount))))
-	} else {
-		tx.Mutate(build.UpdateOffer(rate, build.Amount(amountToString(amount)), build.OfferID(orderid)))
-	}
-}
-
-func tx_memoText( tx *build.TransactionBuilder, memoText string ) {
-	tx.Mutate(build.MemoText{memoText})
-}
-
-func tx_memoID( tx *build.TransactionBuilder, memoID uint64 ) {
-	tx.Mutate(build.MemoID{memoID})
-}
-
-func tx_memoHash( tx *build.TransactionBuilder, memoHash [32]byte ) {
-	tx.Mutate(build.MemoHash{memoHash})
-}
-
-func tx_memoRetHash( tx *build.TransactionBuilder, memoHash [32]byte ) {
-	tx.Mutate(build.MemoReturn{memoHash})
-}
-
-func tx_sign( tx *build.TransactionBuilder) (bool, build.TransactionEnvelopeBuilder) {
-	txe, err :=  tx.Sign()
-	if err != nil {
-		panic(err)
+		fmt.Printf("Failed to sign transaction: %v", err)
+		return false
 	}
 
 	if len(g_signers) > 0 {
-		for _, s := range g_signers {
-			txe.Mutate(build.Sign{s})
-		}
-		return true, txe
-	} else {
-		return false, txe
+		t.signed = true
 	}
+
+	return true
 }
 
-func tx_finalize( tx *build.TransactionBuilder ) {
-	tx.Mutate(build.Defaults{})
-}
+func (t *Transaction)getBlob() string {
+	s, err := t.tx.Base64()
 
-func tx_transmit( txe build.TransactionEnvelopeBuilder ) {
-	txeB64, err := txe.Base64()
-	
 	if err != nil {
-		panic(err)
+		fmt.Printf("Failed to serialize transaction: %v", err)
+		return ""
+	}
+
+	return s
+}
+
+func (t *Transaction) getXdrEnvelope() *xdr.TransactionEnvelope {
+	txe_xdr := &xdr.TransactionEnvelope{ }
+
+	txBlob := t.getBlob()
+
+	if txBlob == "" {
+		return nil
+	}
+
+	err := txe_xdr.Scan(txBlob)
+
+	if err != nil {
+		fmt.Printf("Failed to scan transaction blob: %v", err)
+		return nil
+	}
+
+	if txe_xdr.Tx.SourceAccount.Ed25519 == nil {
+		return nil
+	}
+
+	return txe_xdr
+}
+
+func (t *Transaction) getHash() (error, [32]byte) {
+	h, err := t.tx.Hash()
+
+	if err != nil {
+		fmt.Printf("Failed to hash transaction: %v", err)
+		return err, h
+	}
+
+	return nil, h
+}
+
+
+func (t *Transaction) transmit() error {
+	txeB64, err := t.tx.Base64()
+
+	if err != nil {
+		fmt.Printf("Failed to encode transaction: %v", err)
+		return err
 	}
 
 	tx_transmit_blob(txeB64)
+
+	return nil
 }
 
+
+
+func (t *Transaction) createAccount(dst string, amount string) {
+	op := txnbuild.CreateAccount{Destination:dst, Amount:amount}
+
+	t.tx.Operations = append(t.tx.Operations, &op)
+}
+
+func (t *Transaction) nativePayment(dst string, amount string) {
+	op:= txnbuild.Payment{Destination:dst, Amount:amount, Asset:txnbuild.NativeAsset{}}
+
+	t.tx.Operations = append(t.tx.Operations, &op)
+}
+
+func (t *Transaction) assetPayment(dst string, asset *Asset, amount *big.Rat) {
+	op := txnbuild.Payment{Destination:dst, Amount:amountToString(amount),
+		Asset:txnbuild.CreditAsset{asset.Code(), asset.Issuer()}}
+
+	t.tx.Operations = append(t.tx.Operations, &op)
+}
+
+func (t *Transaction) inflationDestination(dst string) {
+	op := txnbuild.SetOptions{InflationDestination:txnbuild.NewInflationDestination(dst)}
+
+	t.tx.Operations = append(t.tx.Operations, &op)
+}
+
+func (t *Transaction) addTrustLine( asset *Asset) {
+	op := txnbuild.ChangeTrust{Line:txnbuild.CreditAsset{asset.Code(), asset.Issuer()}, Limit:txnbuild.MaxTrustlineLimit}
+
+	t.tx.Operations = append(t.tx.Operations, &op)
+}
+
+func (t *Transaction) removeTrustLine( asset *Asset) {
+	op := txnbuild.RemoveTrustlineOp(txnbuild.CreditAsset{asset.Code(), asset.Issuer()})
+
+	t.tx.Operations = append(t.tx.Operations, &op)
+}
+
+func (t *Transaction) addSellOrder(selling, buying *Asset, price, amount *big.Rat, orderid uint64) {
+	op := txnbuild.ManageSellOffer{
+		Selling:selling.toCreditAsset(),
+		Buying:buying.toCreditAsset(),
+		Amount:amountToString(amount),
+		Price:price.FloatString(10),
+		OfferID:int64(orderid)	}
+
+	t.tx.Operations = append(t.tx.Operations, &op)
+}
+
+func (t *Transaction) addBuyOrder(selling, buying *Asset, price, amount *big.Rat, orderid uint64) {
+	op := txnbuild.ManageBuyOffer{
+		Selling:selling.toCreditAsset(),
+		Buying:buying.toCreditAsset(),
+		Amount:amountToString(amount),
+		Price:price.FloatString(10),
+		OfferID:int64(orderid)	}
+
+	t.tx.Operations = append(t.tx.Operations, &op)
+}
+
+func (t *Transaction) cancelOrder(orderid uint64) {
+	op, _ := txnbuild.DeleteOfferOp(int64(orderid))
+
+	t.tx.Operations = append(t.tx.Operations, &op)
+}
+
+func (t *Transaction) memoText( memoText string ) {
+	t.tx.Memo = txnbuild.MemoText(memoText)
+}
+
+func (t *Transaction) memoID( memoID uint64 ) {
+	t.tx.Memo = txnbuild.MemoID(memoID)
+}
+
+func (t *Transaction) memoHash( memoHash [32]byte ) {
+	t.tx.Memo = txnbuild.MemoHash(memoHash)
+}
+
+func (t *Transaction) memoRetHash( memoHash [32]byte ) {
+	t.tx.Memo = txnbuild.MemoReturn(memoHash)
+}
+
+
+
+
+
+
 func tx_transmit_blob( tx_blob string ) {
-	resp, err := g_horizon.SubmitTransaction(tx_blob)
+	resp, err := g_horizon.SubmitTransactionXDR(tx_blob)
 	if err != nil {
 		fmt.Println("Failed to submit transaction. Horizon error details:")
-		if herr, ok := err.(*horizon.Error); ok {
-			fmt.Println(herr.Problem.Title)
-			fmt.Println(herr.Problem.Detail)
-			fmt.Println(string(herr.Problem.Extras["result_codes"]))
-			fmt.Println(herr.Error())
-
-		} else {
-			fmt.Println(err.Error())
-		}
+		printHorizonError("submit transaction", err)
 	} else {
 		printTransactionResults(resp)
 	}
 }
 
 
-func rawPublicKeyToString( k xdr.AccountId) string {
-	var b32 [32]byte = *k.Ed25519
-
-	return strkey.MustEncode(strkey.VersionByteAccountID, b32[:])
-}
-
-func xdrAssetToString(a xdr.Asset) string {
-	switch a.Type {
-	case xdr.AssetTypeAssetTypeCreditAlphanum4:
-		return string(a.AlphaNum4.AssetCode[:]) + "/" + rawPublicKeyToString(a.AlphaNum4.Issuer)
-
-	case xdr.AssetTypeAssetTypeCreditAlphanum12:
-		return string(a.AlphaNum12.AssetCode[:]) + "/" + rawPublicKeyToString(a.AlphaNum12.Issuer)
-	}
-
-	return "XLM"
-
-}
-
-func changeTrustOpToString(op *xdr.ChangeTrustOp) string {
-	s := "ASSET:" + xdrAssetToString(op.Line)
-
-	if op.Limit != math.MaxInt64 {
-		s += " LIMIT:" + amount.StringFromInt64(int64(op.Limit))
-	}
-
-	return s
-}
-
-func manageSellOfferOpToString(op *xdr.ManageSellOfferOp) string {
-	return "SELL:" + xdrAssetToString(op.Selling) + " BUY:" + xdrAssetToString(op.Buying) +
-		" AMOUNT:" + amount.StringFromInt64(int64(op.Amount)) +
-		" PRICE:" + op.Price.String() + " ID:" + fmt.Sprintf("%d", op.OfferId)
-}
-
-func manageBuyOfferOpToString(op *xdr.ManageBuyOfferOp) string {
-	return "BUY:" + xdrAssetToString(op.Buying) + " SELL:" + xdrAssetToString(op.Selling) +
-		" AMOUNT:" + amount.StringFromInt64(int64(op.BuyAmount)) +
-		" PRICE:" + op.Price.String() + " ID:" + fmt.Sprintf("%d", op.OfferId)
-}
-
-func paymentOpToString( op *xdr.PaymentOp) string {
-	return "DST:" + rawPublicKeyToString(op.Destination) + " AMT:" + op.Asset.String() + ":" + amount.String(op.Amount)
-}
-
-func createAccountOpToString( op *xdr.CreateAccountOp) string {
-	return "DST:" + rawPublicKeyToString(op.Destination) + " AMT:" + amount.String(op.StartingBalance)
-}
-
-func setOptionsFlagsToString( f xdr.Uint32 ) string {
-	var flags []string;
-
-	d := xdr.AccountFlags(f)
-
-	if d & xdr.AccountFlagsAuthRequiredFlag != 0 {
-		flags = append(flags, "AUTH_REQUIRED")
-	}
-
-	if d & xdr.AccountFlagsAuthRevocableFlag != 0 {
-		flags = append(flags, "AUTH_REVOCABLE")
-	}
-
-	if d & xdr.AccountFlagsAuthImmutableFlag != 0 {
-		flags = append(flags, "AUTH_IMMUTABLE")
-	}
-
-	return strconv.FormatUint(uint64(f), 16) + "(" + strings.Join(flags, ",") + ")"
-}
-
-func setOptionsOpToString( op *xdr.SetOptionsOp) string {
-	var r []string
-
-	if op.InflationDest != nil {
-		r = append(r, "INFLATION_DST:" + rawPublicKeyToString(*op.InflationDest))
-	}
-
-	if op.ClearFlags != nil {
-		r = append(r, "CLEAR_FLAGS:" + setOptionsFlagsToString(*op.ClearFlags))
-	}
-
-	if op.SetFlags != nil {
-		r = append(r, "SET_FLAGS:" + setOptionsFlagsToString(*op.SetFlags))
-	}
-
-	if op.MasterWeight != nil {
-		r = append(r, "MASTER_WEIGHT:" + strconv.FormatUint(uint64(*op.MasterWeight), 10))
-	}
-
-	if op.LowThreshold != nil {
-		r = append(r, "LOW_THRESHOLD:" + strconv.FormatUint(uint64(*op.LowThreshold), 10))
-	}
-
-	if op.MedThreshold != nil {
-		r = append(r, "MED_THRESHOLD:" + strconv.FormatUint(uint64(*op.MedThreshold), 10))
-	}
-
-	if op.HighThreshold != nil {
-		r = append(r, "HIGH_THRESHOLD:" + strconv.FormatUint(uint64(*op.HighThreshold), 10))
-	}
-	
-	if op.HomeDomain != nil {
-		r = append(r, "HOME_DOMAIN:" + string(*op.HomeDomain))
-	}
-
-	if op.Signer != nil {
-		if op.Signer.Weight == 0 {
-			r = append(r, "REMOVE_SIGNER:", op.Signer.Key.Address())
-		} else {
-			r = append(r, "ADD_SIGNER:", op.Signer.Key.Address(), ":", strconv.FormatUint(uint64(op.Signer.Weight), 10))
-		}
-	}
-
-	return strings.Join(r, " ")
-}
-
-func allowTrustOpToString(op *xdr.AllowTrustOp) string {
-	var s = "TRUSTOR:" + rawPublicKeyToString(op.Trustor)
-
-	s += " ASSET:"
-
-	switch op.Asset.Type {
-	case xdr.AssetTypeAssetTypeCreditAlphanum4:
-		s += string(op.Asset.AssetCode4[:])
-
-	case xdr.AssetTypeAssetTypeCreditAlphanum12:
-		s += string(op.Asset.AssetCode12[:])
-
-	default:
-		s += "XLM"
-	}
-
-	s += " AUTH:"
-
-	if op.Authorize {
-		s += "TRUE"
-	} else {
-		s += "FALSE"
-	}
-
-	return s
-}
-
-func opToString( op xdr.Operation ) ( opType, opContent string) {
-
-
-	if op.SourceAccount != nil {
-		opContent = "SRC:" + rawPublicKeyToString(*op.SourceAccount) + " "
-	}
-		
-
-	switch op.Body.Type {
-	case xdr.OperationTypeCreateAccount:
-		opType = "Create Account"
-		opContent += createAccountOpToString(op.Body.CreateAccountOp)
-		
-	case xdr.OperationTypePayment:
-		opType = "Payment"
-		opContent += paymentOpToString(op.Body.PaymentOp)
-
-	case xdr.OperationTypePathPayment:
-		opType = "Path Payment"
-
-	case xdr.OperationTypeManageSellOffer:
-		opType = "Manage Sell Offer"
-		opContent += manageSellOfferOpToString(op.Body.ManageSellOfferOp)
-
-	case xdr.OperationTypeManageBuyOffer:
-		opType = "Manage Buy Offer"
-		opContent += manageBuyOfferOpToString(op.Body.ManageBuyOfferOp)
-
-	case xdr.OperationTypeCreatePassiveSellOffer:
-		opType = "Create Passive Offer"
-
-	case xdr.OperationTypeSetOptions:
-		opType = "Set Options"
-		opContent += setOptionsOpToString(op.Body.SetOptionsOp)
-
-	case xdr.OperationTypeChangeTrust:
-		opType = "Change Trust"
-		opContent += changeTrustOpToString(op.Body.ChangeTrustOp)
-
-	case xdr.OperationTypeAllowTrust:
-		opType = "Allow Trust"
-		opContent += allowTrustOpToString(op.Body.AllowTrustOp)
-
-	case xdr.OperationTypeAccountMerge:
-		opType = "Account Merge"
-
-	case xdr.OperationTypeInflation:
-		opType = "Inflation"
-
-	case xdr.OperationTypeManageData:
-		opType = "Manage Data"
-
-	default:
-		opType = "Unknown operation type"
-	}
-
-	return
-}
-
-func paymentToStringPretty( op xdr.Operation, src, acc string)  ( opType, opContent string) {
-
-	if op.SourceAccount != nil {
-		src = rawPublicKeyToString(*op.SourceAccount)
-	}
-
-	pop := op.Body.PaymentOp
-	opType = "Payment"
-
-	dst := rawPublicKeyToString(pop.Destination) 
-
-	if acc == src {
-		opContent = "TO   " + dst
-	} else if acc == dst {
-		opContent = "FROM " + src
-	} else {
-		opType = ""
-		return
-	}
-
-	asset :=  pop.Asset.String()
-	if asset == "native" {
-		asset = "XLM"
-	}
-
-	opContent += " " + asset + " " + amount.String(pop.Amount)
-
-	return
-}
-
-func memoToString( memo xdr.Memo) (mtype, mstr string) {
-	switch memo.Type {
-	case xdr.MemoTypeMemoNone:
-		mtype = "NONE"
-		mstr = ""
-
-	case xdr.MemoTypeMemoText:
-		mtype = "TEXT"
-		mstr = *memo.Text
-
-	case xdr.MemoTypeMemoId:
-		mtype = "ID"
-		mstr = strconv.FormatUint(uint64(*memo.Id), 10)
-
-	case xdr.MemoTypeMemoHash:
-		mtype = "HASH"
-		mstr = hex.EncodeToString((*memo.Hash)[:])
-
-	case xdr.MemoTypeMemoReturn:
-		mtype = "RETURN_HASH"
-		mstr = hex.EncodeToString((*memo.RetHash)[:])
-	}
-
-	return
-}
-
-func print_transaction( txe *xdr.TransactionEnvelope, prefix string, fp io.Writer) {
-	var table [][]string
-
-	tx := txe.Tx
-	
-	table = appendTableLine(table, "Source Account", rawPublicKeyToString(tx.SourceAccount))
-
-	for _, op := range tx.Operations {
-		opType, opContent := opToString( op )
-		table = appendTableLine(table, opType, opContent)
-	}
-
-	mtype, mstr := memoToString(tx.Memo)
-
-	if mstr != "" {
-		table = appendTableLine(table, "Memo", mtype + ":" + mstr)
-	} else {
-		table = appendTableLine(table, "Memo", mtype)
-	}
-
-	table = appendTableLine(table, "Base Fee", amount.String(xdr.Int64(tx.Fee)))
-
-	var seq big.Int
-	seq.SetUint64(uint64(xdr.Uint64(tx.SeqNum)))
-	table = appendTableLine(table, "Sequence", seq.String())
-
-
-	for _, sig := range txe.Signatures {
-		table = appendTableLine(table, "Signature", hex.EncodeToString(sig.Signature))	
-	}
-	
-	printTablePrefixFp(table, 2, ": ", prefix, fp)
-
-}
-
-func pretty_print_transaction( txe *xdr.TransactionEnvelope, acc string) {
-	var table [][]string
-
-	tx := txe.Tx
-	
-	txSrcAcc := rawPublicKeyToString(tx.SourceAccount)
-
-	for _, op := range tx.Operations {
-
-		var opType, opContent string
-
-		if op.Body.Type == xdr.OperationTypePayment {
-			opType, opContent = paymentToStringPretty(op, txSrcAcc, acc)
-		} else { 
-			opType, opContent = opToString( op )
-		}
-		
-		if opType != "" {
-			table = appendTableLine(table, opType, opContent)
-		}
-	}
-
-	mtype, mstr := memoToString(tx.Memo)
-
-	if mtype != "NONE" {
-		table = appendTableLine(table, "Memo", mstr)
-	}
-	
-	printTable(table, 2, ": ")
-}
 
 
 func readTransactionBlob( fileName string) (string, error) {
@@ -660,11 +297,17 @@ func readTransactionBlob( fileName string) (string, error) {
 	return "", err
 }
 
-func writeTransactionBlob( blob string, txe *xdr.TransactionEnvelope, fileName string) error {
+func writeTransactionBlob( blob string, tx *Transaction, fileName string) error {
 	fp, err := os.Create(fileName)
 
 	if err != nil {
 		return err
+	}
+
+	txe := tx.getXdrEnvelope()
+
+	if txe == nil {
+		return errors.New("Failed to decode transaction.")
 	}
 
 	print_transaction( txe, "#", fp)

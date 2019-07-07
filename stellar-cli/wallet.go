@@ -201,9 +201,9 @@ func getWordList() []string {
 }
 
 func fundedCheck(adr string) bool {
-	acc, _ := loadAccount(adr)
+	acc := getAccountInfo(adr, CacheTimeoutForce)
 
-	if acc != nil {
+	if acc.exists {
 		return true
 	}
 
@@ -334,18 +334,16 @@ func listWallet() {
 			fmt.Printf("   Memo ID: %d\n", memoId)
 		}
 		if g_online {
-			ai, err := loadAccount(a.PublicKey())
-			if err != nil {
-				printHorizonError("load account", err)
-			} else {
-				if ai != nil {
-					nb, _ := ai.GetNativeBalance()
-					fmt.Printf("   XLM: %s\n", nb)
+			ai := getAccountInfo(a.PublicKey(), CacheTimeoutShort)
 
-				} else {
-					fmt.Printf("   Not funded\n")
-				}
+			if ai.exists {
+				nb := ai.getNativeBalance()
+				fmt.Printf("   XLM: %s\n", amountToString(nb))
+
+			} else {
+				fmt.Printf("   Not funded\n")
 			}
+
 		}		
 	}
 	

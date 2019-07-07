@@ -1,146 +1,16 @@
 package main
 
 import (
-	"github.com/mua69/stellarwallet"
-	"github.com/stellar/go/clients/horizon"
-	"math/big"
-	"github.com/stellar/go/amount"
 	"fmt"
-	"github.com/stellar/go/build"
+	"github.com/mua69/stellarwallet"
+	"github.com/stellar/go/amount"
+	"github.com/stellar/go/clients/horizonclient"
 	"github.com/stellar/go/keypair"
+	"math/big"
 	"time"
 )
 
-type Asset struct {
-	code string
-	issuer string
-}
 
-var g_assets map[string]*Asset
-var g_nativeAsset *Asset
-
-func newAsset(issuer, code string) *Asset {
-	key := issuer + "/" + code
-
-	if g_assets == nil {
-		g_assets = make(map[string]*Asset)
-	}
-
-	a := g_assets[key]
-
-	if a == nil {
-		a = &Asset{code, issuer}
-		g_assets[key] = a
-	}
-
-	return a
-}
-
-func newNativeAsset() *Asset {
-	if g_nativeAsset == nil {
-		g_nativeAsset = &Asset{}
-	}
-
-	return g_nativeAsset
-}
-
-func newAssetFrom(a interface{}) *Asset {
-	switch a := a.(type) {
-	case *stellarwallet.Asset:
-		if a == nil {
-			return newNativeAsset()
-		} else {
-			return newAsset(a.Issuer(), a.AssetId())
-		}
-	case horizon.Asset:
-		if a.Type == "native" {
-			return newNativeAsset()
-		} else {
-			return newAsset(a.Issuer, a.Code)
-		}
-	}
-
-	return nil
-}
-
-func (a *Asset)isNative() bool {
-	if a.issuer == "" {
-		return true
-	}
-	return false
-}
-
-func (a1 *Asset)isEqual(a2 *Asset) bool {
-	if a1.isNative() && a2.isNative() {
-		return true
-	}
-
-	if a1.issuer == a2.issuer && a1.code == a2.code {
-		return true
-	}
-
-	return false
-}
-
-func (a* Asset)Issuer() string {
-	return a.issuer
-}
-
-func (a* Asset)Code() string {
-	return a.code
-}
-
-func (a* Asset)String() string {
-	if a.isNative() {
-		return "XLM"
-	}
-
-	return a.code +  "/" + a.issuer
-}
-
-func (a* Asset)StringPretty() string {
-	if a.isNative() {
-		return "XLM"
-	}
-
-	issuer := a.issuer[:5] + "..." + a.issuer[len(a.issuer)-5:]
-
-	return a.code +  "/" + issuer
-}
-
-func (a* Asset)codeToString() string {
-	if a.isNative() {
-		return "XLM"
-	} else {
-		return a.code
-	}
-}
-
-func (a* Asset)toHorizonAsset() horizon.Asset {
-	var ha horizon.Asset
-
-	if a.isNative() {
-		ha.Type = "native"
-	} else {
-		if len(a.code) <= 4 {
-			ha.Type = "credit_alphanum4"
-		} else {
-			ha.Type = "credit_alphanum12"
-		}
-		ha.Code = a.code
-		ha.Issuer = a.issuer
-	}
-
-	return ha
-}
-
-func (a *Asset)toBuildAsset() build.Asset {
-	if a.isNative() {
-		return build.NativeAsset()
-	} else {
-		return build.CreditAsset(a.code, a.issuer)
-	}
-}
 
 func printOrderBook(asset1, asset2 *Asset, maxLines int, timeout time.Duration) {
 	ob, err := getOrderBook(asset1, asset2, timeout)
@@ -328,7 +198,7 @@ func getOffers(account string, asset1, asset2 *Asset) []*Offer {
 		matchAll = true
 	}
 
-	offers, err := g_horizon.LoadAccountOffers(account)
+	offers, err := g_horizon.Offers(horizonclient.OfferRequest{ForAccount:account})
 
 	if err != nil {
 		printHorizonError("Load Account Offers", err)
@@ -445,6 +315,7 @@ func trade() {
 			{ "buy", fmt.Sprintf("Buy %s with %s", code1, code2), true},
 			{ "sell", fmt.Sprintf("Sell %s for %s", code1, code2), true},
 			{ "orderid", fmt.Sprintf("Enter Order ID (current: %d)", orderid), true},
+			{ "cancel", "Cancel Order", true},
 			{ "update", "Update Order Book", true},
 			{ "done", "Done", true}}
 
@@ -484,34 +355,47 @@ func trade() {
 			continue
 		}
 
+		if sel == "cancel" {
+			orderid = selectOffer("Select Offer:", getOffers(srcPub, asset1, asset2))
+			if orderid != 0 {
+				tx.cancelOrder(orderid)
+				transactionFinalize(acc, src, tx)
+				tx = newTransaction(src)
+				orderid = 0
+				continue
+			}
+		}
+
 		rate := getPrice("Price")
 		amount1 := getAmount("Amount")
 
 		amount2 := &big.Rat{}
 		amount2.Mul(amount1, rate)
 
+		/*
 		rateInv := &big.Rat{}
 		rateInv.Inv(rate)
 
 		amount3 := &big.Rat{}
 		amount3.Mul(amount2, rateInv)
+*/
 
 		if sel == "sell" {
 			fmt.Printf("Selling %s %s for %s %s, rate %s\n", amountToString(amount1), code1,
 				amountToString(amount2), code2, rate.FloatString(7))
 
-			tx_addSellOrder(tx, asset1, asset2, rate, amount1, orderid)
+			tx.addSellOrder(asset1, asset2, rate, amount1, orderid)
 		} else {
 			fmt.Printf("Buying %s %s with %s %s, rate %s\n", amountToString(amount1), code1,
 				amountToString(amount2), code2, rate.FloatString(7))
-			fmt.Printf("Selling %s %s for %s %s, rate %s\n", amountToString(amount2), code2,
-				amountToString(amount3), code1, rateInv.FloatString(7))
+			//fmt.Printf("Selling %s %s for %s %s, rate %s\n", amountToString(amount2), code2,
+			//	amountToString(amount3), code1, rateInv.FloatString(7))
 
-			tx_addSellOrder(tx, asset2, asset1, rateInv, amount2, orderid)
+			tx.addBuyOrder(asset2, asset1, rate, amount1, orderid)
 		}
 
 		transactionFinalize(acc, src, tx)
 
-		tx = tx_setup(src)
+		tx = newTransaction(src)
 	}
 }

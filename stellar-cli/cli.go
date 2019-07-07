@@ -2,25 +2,25 @@ package main
 
 
 import (
-	"errors"
-	"unicode"
-	"strconv"
-	"fmt"
-	"strings"
-	"io"
-	"os"
 	"bufio"
-	"unicode/utf8"
 	"encoding/hex"
-	"golang.org/x/crypto/ssh/terminal"
+	"errors"
+	"fmt"
+	"github.com/mua69/stellarwallet"
+	"github.com/stellar/go/address"
+	"github.com/stellar/go/amount"
 	"github.com/stellar/go/keypair"
 	"github.com/stellar/go/price"
-	"github.com/stellar/go/amount"
-	"github.com/stellar/go/address"
-	"github.com/mua69/stellarwallet"
-	"math/big"
-	"github.com/stellar/go/clients/horizon"
+	hprotocol "github.com/stellar/go/protocols/horizon"
 	"github.com/stellar/go/xdr"
+	"golang.org/x/crypto/ssh/terminal"
+	"io"
+	"math/big"
+	"os"
+	"strconv"
+	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 
@@ -274,8 +274,8 @@ func getPayment(prompt string) (string) {
 
 func priceToRat(price interface{}) *big.Rat {
 	switch price.(type) {
-	case horizon.Price:
-		p := price.(horizon.Price)
+	case hprotocol.Price:
+		p := price.(hprotocol.Price)
 		return big.NewRat(int64(p.N), int64(p.D))
 	case xdr.Price:
 		p := price.(xdr.Price)
@@ -304,11 +304,6 @@ func getPrice(prompt string) *big.Rat {
 			return priceToRat(p)
 		}
 	}
-}
-
-func amountToRat(a string) *big.Rat {
-	amnt := amount.MustParse(a)
-	return big.NewRat(int64(amnt), 1)
 }
 
 // read amount from the terminal
