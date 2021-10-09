@@ -4,20 +4,48 @@ import (
 	"encoding/hex"
 	"fmt"
 	"github.com/stellar/go/amount"
-	"github.com/stellar/go/strkey"
 	"github.com/stellar/go/xdr"
 	"io"
 	"math"
 	"math/big"
 	"strconv"
 	"strings"
+	"time"
 )
 
-func rawPublicKeyToString( k xdr.AccountId) string {
-	var b32 [32]byte = *k.Ed25519
-
-	return strkey.MustEncode(strkey.VersionByteAccountID, b32[:])
+func rawPublicKeyToString( k interface{}) string {
+	switch a := k.(type) {
+	case xdr.MuxedAccount:
+		s, err := a.GetAddress()
+		if err == nil {
+			return s
+		} else {
+			return "invalid address"
+		}
+	case xdr.AccountId:
+		s, err := a.GetAddress()
+		if err == nil {
+			return s
+		} else {
+			return "invalid address"
+		}
+	default:
+		return "rawPublicKeyToString: unknown account type"
+	}
 }
+
+func xdrChangeTrustAssetToString(a xdr.ChangeTrustAsset) string {
+	switch a.Type {
+	case xdr.AssetTypeAssetTypeCreditAlphanum4:
+		return string(a.AlphaNum4.AssetCode[:]) + "/" + rawPublicKeyToString(a.AlphaNum4.Issuer)
+
+	case xdr.AssetTypeAssetTypeCreditAlphanum12:
+		return string(a.AlphaNum12.AssetCode[:]) + "/" + rawPublicKeyToString(a.AlphaNum12.Issuer)
+	}
+
+	return "XLM"
+}
+
 
 func xdrAssetToString(a xdr.Asset) string {
 	switch a.Type {
@@ -33,7 +61,7 @@ func xdrAssetToString(a xdr.Asset) string {
 }
 
 func changeTrustOpToString(op *xdr.ChangeTrustOp) string {
-	s := "ASSET:" + xdrAssetToString(op.Line)
+	s := "ASSET:" + xdrChangeTrustAssetToString(op.Line)
 
 	if op.Limit != math.MaxInt64 {
 		s += " LIMIT:" + amount.StringFromInt64(int64(op.Limit))
@@ -146,11 +174,117 @@ func allowTrustOpToString(op *xdr.AllowTrustOp) string {
 
 	s += " AUTH:"
 
-	if op.Authorize {
-		s += "TRUE"
-	} else {
+	switch op.Authorize {
+	case 0:
 		s += "FALSE"
+	default:
+		s += "TRUE"
 	}
+
+	return s
+}
+
+func claimPredicateIsUpperBound(p *xdr.ClaimPredicate) bool {
+	if p.Type == xdr.ClaimPredicateTypeClaimPredicateBeforeAbsoluteTime ||
+		p.Type == xdr.ClaimPredicateTypeClaimPredicateBeforeRelativeTime {
+		return true
+	}
+
+	return false
+}
+
+func claimPredicateIsLowerBound(p *xdr.ClaimPredicate) bool {
+	if p.Type == xdr.ClaimPredicateTypeClaimPredicateNot &&
+		claimPredicateIsUpperBound(*p.NotPredicate) {
+		return true
+	}
+	return false
+}
+
+func claimPredicateIsRange(p *xdr.ClaimPredicate) bool {
+	if p.Type == xdr.ClaimPredicateTypeClaimPredicateAnd {
+		a := &(*p.AndPredicates)[0]
+		b := &(*p.AndPredicates)[1]
+		if claimPredicateIsLowerBound(a) && claimPredicateIsUpperBound(b) {
+			return true
+		}
+	}
+	return false
+}
+
+func claimPredicateTimeToString(p *xdr.ClaimPredicate, ledgerTime time.Time) string {
+	switch p.Type {
+	case xdr.ClaimPredicateTypeClaimPredicateBeforeAbsoluteTime:
+		return time.Unix(int64(*p.AbsBefore), 0).Format(time.RFC3339)
+
+	case xdr.ClaimPredicateTypeClaimPredicateBeforeRelativeTime:
+		return time.Unix(ledgerTime.Unix()+int64(*p.RelBefore), 0).Format(time.RFC3339)
+	}
+	return ""
+}
+
+func claimPredicateRangeToString(p *xdr.ClaimPredicate, ledgerTime time.Time) string {
+	a := p.MustAndPredicates()[0].MustNotPredicate()
+	b := &p.MustAndPredicates()[1]
+
+	return claimPredicateTimeToString(a, ledgerTime) + " - " + claimPredicateTimeToString(b, ledgerTime)
+}
+
+func claimPredicateToString(p *xdr.ClaimPredicate, ledgerTime time.Time) string {
+	if claimPredicateIsRange(p) {
+		return claimPredicateRangeToString(p, ledgerTime)
+	}
+
+	switch p.Type {
+	case xdr.ClaimPredicateTypeClaimPredicateUnconditional:
+		return "unconditional"
+
+	case xdr.ClaimPredicateTypeClaimPredicateBeforeAbsoluteTime:
+		return "<" + claimPredicateTimeToString(p, ledgerTime)
+
+	case xdr.ClaimPredicateTypeClaimPredicateBeforeRelativeTime:
+		return "<(rel)" + claimPredicateTimeToString(p, ledgerTime)
+
+	case xdr.ClaimPredicateTypeClaimPredicateNot:
+		return "not(" + claimPredicateToString(*p.NotPredicate, ledgerTime) + ")"
+
+	case xdr.ClaimPredicateTypeClaimPredicateOr:
+		return claimPredicateToString(&(*p.OrPredicates)[0], ledgerTime) + " || " +
+			claimPredicateToString(&(*p.OrPredicates)[1], ledgerTime)
+	case xdr.ClaimPredicateTypeClaimPredicateAnd:
+		return "(" + claimPredicateToString(&(*p.AndPredicates)[0], ledgerTime) + " && " +
+			claimPredicateToString(&(*p.AndPredicates)[1], ledgerTime) + ")"
+	}
+
+	return ""
+}
+
+func claimClaimableBalanceToString(op *xdr.ClaimClaimableBalanceOp) string {
+	s := ""
+
+	hash, ok := op.BalanceId.GetV0()
+	if ok {
+		s = "BALANCE ID: " + hash.HexString()
+	}
+	return s
+}
+
+func claimantsToString(cl []xdr.Claimant) string {
+	s := ""
+
+	for _, c := range(cl) {
+		cv0, ok := c.GetV0()
+		if ok {
+			s += rawPublicKeyToString(cv0.Destination) + " "
+		}
+	}
+
+	return s
+}
+
+func createClaimableBalanceToString(op *xdr.CreateClaimableBalanceOp) string {
+	var s = "ASSET: " + xdrAssetToString(op.Asset)
+	s += " AMOUNT: " + amount.String(op.Amount) + " CLAIMANTS: " + claimantsToString(op.Claimants)
 
 	return s
 }
@@ -172,8 +306,8 @@ func opToString( op xdr.Operation ) ( opType, opContent string) {
 		opType = "Payment"
 		opContent += paymentOpToString(op.Body.PaymentOp)
 
-	case xdr.OperationTypePathPayment:
-		opType = "Path Payment"
+//	case xdr.OperationTypePathPayment:
+//		opType = "Path Payment"
 
 	case xdr.OperationTypeManageSellOffer:
 		opType = "Manage Sell Offer"
@@ -207,8 +341,16 @@ func opToString( op xdr.Operation ) ( opType, opContent string) {
 	case xdr.OperationTypeManageData:
 		opType = "Manage Data"
 
+	case xdr.OperationTypeCreateClaimableBalance:
+		opType = "Create Claimable Balance"
+		opContent += createClaimableBalanceToString(op.Body.CreateClaimableBalanceOp)
+
+	case xdr.OperationTypeClaimClaimableBalance:
+		opType = "Claim Claimable Balance"
+		opContent += claimClaimableBalanceToString(op.Body.ClaimClaimableBalanceOp)
+
 	default:
-		opType = "Unknown operation type"
+		opType = fmt.Sprintf("Unknown operation type: %d", op.Body.Type)
 	}
 
 	return
@@ -273,16 +415,16 @@ func memoToString( memo xdr.Memo) (mtype, mstr string) {
 func print_transaction( txe *xdr.TransactionEnvelope, prefix string, fp io.Writer) {
 	var table [][]string
 
-	tx := txe.Tx
+	tx := txe
 
-	table = appendTableLine(table, "Source Account", rawPublicKeyToString(tx.SourceAccount))
+	table = appendTableLine(table, "Source Account", rawPublicKeyToString(tx.SourceAccount()))
 
-	for _, op := range tx.Operations {
+	for _, op := range tx.Operations() {
 		opType, opContent := opToString( op )
 		table = appendTableLine(table, opType, opContent)
 	}
 
-	mtype, mstr := memoToString(tx.Memo)
+	mtype, mstr := memoToString(tx.Memo())
 
 	if mstr != "" {
 		table = appendTableLine(table, "Memo", mtype + ":" + mstr)
@@ -290,14 +432,14 @@ func print_transaction( txe *xdr.TransactionEnvelope, prefix string, fp io.Write
 		table = appendTableLine(table, "Memo", mtype)
 	}
 
-	table = appendTableLine(table, "Base Fee", amount.String(xdr.Int64(tx.Fee)))
+	table = appendTableLine(table, "Base Fee", amount.String(xdr.Int64(tx.Fee())))
 
 	var seq big.Int
-	seq.SetUint64(uint64(xdr.Uint64(tx.SeqNum)))
+	seq.SetUint64(uint64(xdr.Uint64(tx.SeqNum())))
 	table = appendTableLine(table, "Sequence", seq.String())
 
 
-	for _, sig := range txe.Signatures {
+	for _, sig := range txe.Signatures() {
 		table = appendTableLine(table, "Signature", hex.EncodeToString(sig.Signature))
 	}
 
@@ -308,11 +450,11 @@ func print_transaction( txe *xdr.TransactionEnvelope, prefix string, fp io.Write
 func pretty_print_transaction( txe *xdr.TransactionEnvelope, acc string) {
 	var table [][]string
 
-	tx := txe.Tx
+	tx := txe
 
-	txSrcAcc := rawPublicKeyToString(tx.SourceAccount)
+	txSrcAcc := rawPublicKeyToString(tx.SourceAccount())
 
-	for _, op := range tx.Operations {
+	for _, op := range tx.Operations() {
 
 		var opType, opContent string
 
@@ -327,7 +469,7 @@ func pretty_print_transaction( txe *xdr.TransactionEnvelope, acc string) {
 		}
 	}
 
-	mtype, mstr := memoToString(tx.Memo)
+	mtype, mstr := memoToString(tx.Memo())
 
 	if mtype != "NONE" {
 		table = appendTableLine(table, "Memo", mstr)

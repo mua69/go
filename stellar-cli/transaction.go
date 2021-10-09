@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"encoding/base64"
 	"fmt"
 	"github.com/pkg/errors"
 	"github.com/stellar/go/clients/horizonclient"
@@ -13,7 +14,6 @@ import (
 	"os"
 	"strings"
 )
-
 
 func printHorizonError(action string, err error) {
 	if err != nil {
@@ -32,20 +32,31 @@ func printHorizonError(action string, err error) {
 	}
 }
 
+func printTransactionResults(tx hprotocol.Transaction) {
+	fmt.Println("Transaction posted in ledger: ", tx.Ledger)
+	fmt.Println("Transaction hash            : ", tx.Hash)
+}
 
-func printTransactionResults( txr hprotocol.TransactionSuccess) {
-	fmt.Println("Transaction posted in ledger: ", txr.Ledger)
-	fmt.Println("Transaction hash            : ", txr.Hash)
+func decodeXdrTransaction(s string) (*xdr.TransactionEnvelope, error) {
+	reader := strings.NewReader(s)
+	b64r := base64.NewDecoder(base64.StdEncoding, reader)
+
+	var txe xdr.TransactionEnvelope
+	_, err := xdr.Unmarshal(b64r, &txe)
+
+	return &txe, err
 }
 
 type Transaction struct {
-	tx *txnbuild.Transaction
-	signed bool
+	tx            *txnbuild.Transaction
+	sourceAccount txnbuild.Account
+	memo		  txnbuild.Memo
+	ops           []txnbuild.Operation
+	signed        bool
 }
 
 func newTransaction(src string) *Transaction {
 	acc := getAccountInfo(src, CacheTimeoutForce)
-
 
 	if !acc.exists {
 		// account does not exist
@@ -53,29 +64,30 @@ func newTransaction(src string) *Transaction {
 	}
 
 	t := new(Transaction)
-	t.tx = new(txnbuild.Transaction)
-
-	t.tx.SourceAccount = acc.horizonData
-
-	t.tx.Network = g_network
-
+	t.sourceAccount = acc.horizonData
+	t.tx = nil
 	t.signed = false
 
 	return t
 }
 
-func (t *Transaction)isSigned() bool {
+func (t *Transaction) isSigned() bool {
 	return t.signed
 }
 
 func (t *Transaction) sign() bool {
 
-	t.tx.Timebounds = txnbuild.NewTimeout(60)
-
-	err := t.tx.Build()
+	tx, err := txnbuild.NewTransaction(
+		txnbuild.TransactionParams{
+			SourceAccount:        t.sourceAccount,
+			IncrementSequenceNum: true,
+			BaseFee:              txnbuild.MinBaseFee,
+			Timebounds:           txnbuild.NewTimeout(300),
+			Operations:           t.ops,
+		Memo: t.memo})
 
 	if err != nil {
-		fmt.Printf("Failed to build transaction: %v", err)
+		fmt.Printf("Failed to create transaction: %v\n", err)
 		return false
 	}
 
@@ -88,7 +100,7 @@ func (t *Transaction) sign() bool {
 		signers = append(signers, kpf)
 	}
 
-	err = t.tx.Sign(signers...)
+	t.tx, err = tx.Sign(g_network, signers...)
 
 	if err != nil {
 		fmt.Printf("Failed to sign transaction: %v", err)
@@ -102,7 +114,11 @@ func (t *Transaction) sign() bool {
 	return true
 }
 
-func (t *Transaction)getBlob() string {
+func (t *Transaction) getBlob() string {
+	if t.tx == nil {
+		return ""
+	}
+
 	s, err := t.tx.Base64()
 
 	if err != nil {
@@ -114,30 +130,32 @@ func (t *Transaction)getBlob() string {
 }
 
 func (t *Transaction) getXdrEnvelope() *xdr.TransactionEnvelope {
-	txe_xdr := &xdr.TransactionEnvelope{ }
-
 	txBlob := t.getBlob()
 
 	if txBlob == "" {
 		return nil
 	}
 
-	err := txe_xdr.Scan(txBlob)
+	rawr := strings.NewReader(txBlob)
+	b64r := base64.NewDecoder(base64.StdEncoding, rawr)
+
+	var txe xdr.TransactionEnvelope
+	_, err := xdr.Unmarshal(b64r, &txe)
+
 
 	if err != nil {
 		fmt.Printf("Failed to scan transaction blob: %v", err)
 		return nil
 	}
 
-	if txe_xdr.Tx.SourceAccount.Ed25519 == nil {
-		return nil
-	}
-
-	return txe_xdr
+	return &txe
 }
 
 func (t *Transaction) getHash() (error, [32]byte) {
-	h, err := t.tx.Hash()
+	if t.tx == nil {
+		return errors.New("tx is nil"), [32]byte{}
+	}
+	h, err := t.tx.Hash(g_network)
 
 	if err != nil {
 		fmt.Printf("Failed to hash transaction: %v", err)
@@ -146,7 +164,6 @@ func (t *Transaction) getHash() (error, [32]byte) {
 
 	return nil, h
 }
-
 
 func (t *Transaction) transmit() error {
 	txeB64, err := t.tx.Base64()
@@ -161,95 +178,93 @@ func (t *Transaction) transmit() error {
 	return nil
 }
 
-
-
 func (t *Transaction) createAccount(dst string, amount string) {
-	op := txnbuild.CreateAccount{Destination:dst, Amount:amount}
+	op := txnbuild.CreateAccount{Destination: dst, Amount: amount}
 
-	t.tx.Operations = append(t.tx.Operations, &op)
+	t.ops = append(t.ops, &op)
 }
 
 func (t *Transaction) nativePayment(dst string, amount string) {
-	op:= txnbuild.Payment{Destination:dst, Amount:amount, Asset:txnbuild.NativeAsset{}}
+	op := txnbuild.Payment{Destination: dst, Amount: amount, Asset: txnbuild.NativeAsset{}}
 
-	t.tx.Operations = append(t.tx.Operations, &op)
+	t.ops = append(t.ops, &op)
 }
 
 func (t *Transaction) assetPayment(dst string, asset *Asset, amount *big.Rat) {
-	op := txnbuild.Payment{Destination:dst, Amount:amountToString(amount),
-		Asset:txnbuild.CreditAsset{asset.Code(), asset.Issuer()}}
+	op := txnbuild.Payment{Destination: dst, Amount: amountToString(amount),
+		Asset: txnbuild.CreditAsset{asset.Code(), asset.Issuer()}}
 
-	t.tx.Operations = append(t.tx.Operations, &op)
+	t.ops = append(t.ops, &op)
 }
 
 func (t *Transaction) inflationDestination(dst string) {
-	op := txnbuild.SetOptions{InflationDestination:txnbuild.NewInflationDestination(dst)}
+	op := txnbuild.SetOptions{InflationDestination: txnbuild.NewInflationDestination(dst)}
 
-	t.tx.Operations = append(t.tx.Operations, &op)
+	t.ops = append(t.ops, &op)
 }
 
-func (t *Transaction) addTrustLine( asset *Asset) {
-	op := txnbuild.ChangeTrust{Line:txnbuild.CreditAsset{asset.Code(), asset.Issuer()}, Limit:txnbuild.MaxTrustlineLimit}
+func (t *Transaction) addTrustLine(asset *Asset) {
+	op := txnbuild.ChangeTrust{Line: txnbuild.CreditAsset{asset.Code(), asset.Issuer()}, Limit: txnbuild.MaxTrustlineLimit}
 
-	t.tx.Operations = append(t.tx.Operations, &op)
+	t.ops = append(t.ops, &op)
 }
 
-func (t *Transaction) removeTrustLine( asset *Asset) {
+func (t *Transaction) removeTrustLine(asset *Asset) {
 	op := txnbuild.RemoveTrustlineOp(txnbuild.CreditAsset{asset.Code(), asset.Issuer()})
 
-	t.tx.Operations = append(t.tx.Operations, &op)
+	t.ops = append(t.ops, &op)
 }
 
 func (t *Transaction) addSellOrder(selling, buying *Asset, price, amount *big.Rat, orderid uint64) {
 	op := txnbuild.ManageSellOffer{
-		Selling:selling.toCreditAsset(),
-		Buying:buying.toCreditAsset(),
-		Amount:amountToString(amount),
-		Price:price.FloatString(10),
-		OfferID:int64(orderid)	}
+		Selling: selling.toCreditAsset(),
+		Buying:  buying.toCreditAsset(),
+		Amount:  amountToString(amount),
+		Price:   price.FloatString(10),
+		OfferID: int64(orderid)}
 
-	t.tx.Operations = append(t.tx.Operations, &op)
+	t.ops = append(t.ops, &op)
 }
 
 func (t *Transaction) addBuyOrder(selling, buying *Asset, price, amount *big.Rat, orderid uint64) {
 	op := txnbuild.ManageBuyOffer{
-		Selling:selling.toCreditAsset(),
-		Buying:buying.toCreditAsset(),
-		Amount:amountToString(amount),
-		Price:price.FloatString(10),
-		OfferID:int64(orderid)	}
+		Selling: selling.toCreditAsset(),
+		Buying:  buying.toCreditAsset(),
+		Amount:  amountToString(amount),
+		Price:   price.FloatString(10),
+		OfferID: int64(orderid)}
 
-	t.tx.Operations = append(t.tx.Operations, &op)
+	t.ops = append(t.ops, &op)
 }
 
 func (t *Transaction) cancelOrder(orderid uint64) {
 	op, _ := txnbuild.DeleteOfferOp(int64(orderid))
 
-	t.tx.Operations = append(t.tx.Operations, &op)
+	t.ops = append(t.ops, &op)
 }
 
-func (t *Transaction) memoText( memoText string ) {
-	t.tx.Memo = txnbuild.MemoText(memoText)
+func (t *Transaction) claimClaimableBalacne(balanceId string) {
+	op :=txnbuild.ClaimClaimableBalance{BalanceID: balanceId}
+	t.ops = append(t.ops, &op)
 }
 
-func (t *Transaction) memoID( memoID uint64 ) {
-	t.tx.Memo = txnbuild.MemoID(memoID)
+func (t *Transaction) memoText(memoText string) {
+	t.memo = txnbuild.MemoText(memoText)
 }
 
-func (t *Transaction) memoHash( memoHash [32]byte ) {
-	t.tx.Memo = txnbuild.MemoHash(memoHash)
+func (t *Transaction) memoID(memoID uint64) {
+	t.memo = txnbuild.MemoID(memoID)
 }
 
-func (t *Transaction) memoRetHash( memoHash [32]byte ) {
-	t.tx.Memo = txnbuild.MemoReturn(memoHash)
+func (t *Transaction) memoHash(memoHash [32]byte) {
+	t.memo = txnbuild.MemoHash(memoHash)
 }
 
+func (t *Transaction) memoRetHash(memoHash [32]byte) {
+	t.memo = txnbuild.MemoReturn(memoHash)
+}
 
-
-
-
-
-func tx_transmit_blob( tx_blob string ) {
+func tx_transmit_blob(tx_blob string) {
 	resp, err := g_horizon.SubmitTransactionXDR(tx_blob)
 	if err != nil {
 		fmt.Println("Failed to submit transaction. Horizon error details:")
@@ -259,10 +274,7 @@ func tx_transmit_blob( tx_blob string ) {
 	}
 }
 
-
-
-
-func readTransactionBlob( fileName string) (string, error) {
+func readTransactionBlob(fileName string) (string, error) {
 	fp, err := os.Open(fileName)
 
 	if err != nil {
@@ -271,10 +283,9 @@ func readTransactionBlob( fileName string) (string, error) {
 
 	scan := bufio.NewScanner(fp)
 
-	
 	for scan.Scan() {
 		line := scan.Text()
-		
+
 		line = strings.TrimSpace(line)
 
 		i := strings.Index(line, "#")
@@ -297,7 +308,7 @@ func readTransactionBlob( fileName string) (string, error) {
 	return "", err
 }
 
-func writeTransactionBlob( blob string, tx *Transaction, fileName string) error {
+func writeTransactionBlob(blob string, tx *Transaction, fileName string) error {
 	fp, err := os.Create(fileName)
 
 	if err != nil {
@@ -310,17 +321,16 @@ func writeTransactionBlob( blob string, tx *Transaction, fileName string) error 
 		return errors.New("Failed to decode transaction.")
 	}
 
-	print_transaction( txe, "#", fp)
+	print_transaction(txe, "#", fp)
 
-	_, err = fmt.Fprintf( fp, "%s\n", blob)
+	_, err = fmt.Fprintf(fp, "%s\n", blob)
 
 	if err != nil {
 		fp.Close()
 		return err
 	}
-	
 
-	err = fp.Close() 
+	err = fp.Close()
 
 	if err != nil {
 		return err
@@ -332,7 +342,7 @@ func writeTransactionBlob( blob string, tx *Transaction, fileName string) error 
 // read signers (private keys) from given file.
 // '#' used for comments
 // lines not containing a valid private key are silently ignored
-func readSignersFile( fileName string) (cnt int, err error) {
+func readSignersFile(fileName string) (cnt int, err error) {
 	cnt = 0
 	fp, err := os.Open(fileName)
 
@@ -342,7 +352,6 @@ func readSignersFile( fileName string) (cnt int, err error) {
 
 	scan := bufio.NewScanner(fp)
 
-	
 	for scan.Scan() {
 		line := scan.Text()
 		err = scan.Err()
@@ -351,7 +360,6 @@ func readSignersFile( fileName string) (cnt int, err error) {
 			fp.Close()
 			return cnt, err
 		}
-
 
 		i := strings.Index(line, "#")
 		if i >= 0 {
@@ -400,10 +408,10 @@ func readSignersFromFile() int {
 }
 
 func readSigners() {
-	for cnt:= 0;  len(g_signers) < 20 ; cnt++ {
+	for cnt := 0; len(g_signers) < 20; cnt++ {
 		var seed string
 
-		seed = getSeed("Additional private signing key (hit enter to skip)", true)			
+		seed = getSeed("Additional private signing key (hit enter to skip)", true)
 
 		if seed == "" {
 			return

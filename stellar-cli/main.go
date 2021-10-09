@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"encoding/hex"
 	"flag"
 	"fmt"
@@ -76,7 +77,7 @@ func setupNetwork() {
 	} else {
 		g_network = network.PublicNetworkPassphrase
 		g_horizon = &horizonclient.Client{
-			HorizonURL:  "https://horizon.crymel.icu/",
+			HorizonURL:  "https://horizon.stellar.org/",
 			HTTP: http.DefaultClient,
 		}
 	}
@@ -458,6 +459,10 @@ func enterInflationDestination(tx *Transaction) {
 	tx.inflationDestination(dst)
 }	
 
+func enterClaimClaimableBalance(tx *Transaction) {
+	id := readLine("Balance ID:")
+	tx.claimClaimableBalacne(id)
+}
 
 func enterMemo(tx *Transaction) {
 	fmt.Println("Select Memo Type:")
@@ -569,6 +574,7 @@ func sign_transaction() {
 }
 */
 
+/*
 func submit_transaction() {
 	var tx_s string
 	var err error
@@ -583,19 +589,22 @@ func submit_transaction() {
 	} else {
 		tx_s = readLine("Transaction blob")
 	}
-		
-	txe_xdr := &xdr.TransactionEnvelope{ }
 
-	txe_xdr.Scan(tx_s)
-	if txe_xdr.Tx.SourceAccount.Ed25519 == nil {
-		fmt.Printf("Invalid transaction blob: %s\n")
+	rawr := strings.NewReader(tx_s)
+	b64r := base64.NewDecoder(base64.StdEncoding, rawr)
+
+	var tx xdr.TransactionEnvelope
+	_, err = xdr.Unmarshal(b64r, &tx)
+
+	if err != nil {
+		fmt.Printf("Invalid transaction blob: %v\n", err)
 		return
 	}
 
 	fmt.Println("\nTransaction details:")
-	print_transaction( txe_xdr, "", os.Stdout )
+	print_transaction( &tx, "", os.Stdout )
 
-	if len(txe_xdr.Signatures) == 0 {
+	if len(tx.Signatures()) == 0 {
 		fmt.Printf("\nTransaction is not signed - cannot submit.\n")
 		return
 	}
@@ -604,6 +613,7 @@ func submit_transaction() {
 		tx_transmit_blob(tx_s)
 	}
 }	
+*/
 
 func transfer_xlm() {
 	acc, src, tx := enterSourceAccount()
@@ -644,6 +654,14 @@ func setInflationDestination() {
 
 	transactionFinalize(acc, src, tx)
 
+}
+
+func claimClaimableBalance() {
+	acc, src, tx := enterSourceAccount()
+
+	enterClaimClaimableBalance(tx)
+
+	transactionFinalize(acc, src, tx)
 }
 
 func generateVanityAddress() {
@@ -722,13 +740,18 @@ func showTransactions() {
 		for i, _ := range txs {
 			tx := &txs[i]
 			fmt.Printf("\n%s %s:\n", tx.LedgerCloseTime.Format(time.RFC3339), tx.Hash )
-			txe := &xdr.TransactionEnvelope{ }
+			rawr := strings.NewReader(tx.EnvelopeXdr)
+			b64r := base64.NewDecoder(base64.StdEncoding, rawr)
+
+			var txe xdr.TransactionEnvelope
+			_, err = xdr.Unmarshal(b64r, &txe)
 			
-			err := txe.Scan(tx.EnvelopeXdr)
-			
-			if err == nil && txe.Tx.SourceAccount.Ed25519  != nil {
-				pretty_print_transaction(txe, adr)
+			if err == nil {
+				pretty_print_transaction(&txe, adr)
+			} else {
+				fmt.Printf("Cannot decode transaction: %v", err)
 			}
+
 		}
 
 		
@@ -736,8 +759,40 @@ func showTransactions() {
 			break
 		}
 	}
-				
+}
 
+func showClaimableBalances() {
+	var adr string
+
+	acc := selectAnyAccount("Select account", true)
+
+	if acc != nil {
+		adr = acc.PublicKey()
+	} else {
+		adr = getAddress("Account")
+	}
+
+//	a := enterAsset("")
+
+
+	req := horizonclient.ClaimableBalanceRequest{Claimant: adr}
+
+	res, err := g_horizon.ClaimableBalances(req)
+
+	if err != nil {
+		printHorizonError("Get Claimable Balance", err)
+		return
+	}
+
+	for i := range(res.Embedded.Records) {
+		d := &res.Embedded.Records[i]
+		fmt.Printf("Asset: %s, Amount: %s, ID: %s\n", d.Asset, d.Amount, d.BalanceID)
+		for c := range(d.Claimants) {
+			if d.Claimants[c].Destination == adr {
+				fmt.Printf("  Condition: %s\n", claimPredicateToString(&d.Claimants[c].Predicate, *d.LastModifiedTime))
+			}
+		}
+	}
 }
 
 func addTrustLine() {
@@ -777,6 +832,7 @@ func transaction() {
 		{ createAccount, "Create New Account", true},
 		{ addTrustLine, "Create Trust Line", true},
 		{ createOrder, "Create Order", true},
+		{claimClaimableBalance, "Claim Claimable Balance", true},
 		{ setInflationDestination, "Set Inflation Destination", true}}
 
 	
@@ -879,11 +935,12 @@ func mainMenu() {
 		{ orderBook, "Show Order Book", true},
 		{ trade, "Trading", true},
 		{ showTransactions, "Show Account Transactions", true},
+		{ showClaimableBalances, "Show Claimable Balances", true},
 		{ transaction, "Primitive Transactions", true},
 		{ lookupFederation, "Federation Lookup", true},
 		{ generateVanityAddress,  "Generate New Address", true},
-		//{ sign_transaction,   "Sign Transaction", true},
-		{ submit_transaction, "Submit Signed Transaction", true},
+//		{ sign_transaction,   "Sign Transaction", true},
+//		{ submit_transaction, "Submit Signed Transaction", true},
 		{ fundAccount,  "Fund Account (test network only)", g_testnet} }
 	
 

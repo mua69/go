@@ -3,10 +3,9 @@ package main
 import (
 	"github.com/mua69/stellarwallet"
 	"github.com/stellar/go/amount"
-	"github.com/stellar/go/build"
 	"github.com/stellar/go/clients/horizonclient"
-	"github.com/stellar/go/txnbuild"
 	hprotocol "github.com/stellar/go/protocols/horizon"
+	"github.com/stellar/go/txnbuild"
 	"math/big"
 )
 
@@ -136,11 +135,11 @@ func (a* Asset)toCreditAsset() txnbuild.Asset  {
 }
 
 
-func (a *Asset)toBuildAsset() build.Asset {
+func (a *Asset)toBuildAsset() txnbuild.Asset {
 	if a.isNative() {
-		return build.NativeAsset()
+		return txnbuild.NativeAsset{}
 	} else {
-		return build.CreditAsset(a.code, a.issuer)
+		return txnbuild.CreditAsset{a.code, a.issuer}
 	}
 }
 
